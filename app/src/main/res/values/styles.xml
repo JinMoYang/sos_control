@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shared styles for the measurement controls. The panel is a stack of "label + row of
+     equal-width options", so these three styles cover nearly every widget in it. -->
+<resources>
+
+    <!-- Caption above an option row. -->
+    <style name="SectionLabel">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textColor">@color/text_label</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:layout_marginTop">4dp</item>
+    </style>
+
+    <!-- Horizontal container whose children share the width equally. -->
+    <style name="OptionRow">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:orientation">horizontal</item>
+        <item name="android:layout_marginTop">2dp</item>
+    </style>
+
+    <!-- One option inside an OptionRow. -->
+    <style name="Option">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textSize">12sp</item>
+    </style>
+
+    <!-- For rows of five or more, where 12sp starts truncating labels. -->
+    <style name="Option.Narrow">
+        <item name="android:textSize">10sp</item>
+    </style>
+
+    <!-- Readout chip floating over the preview. -->
+    <style name="PreviewOverlayText">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:background">@color/scrim</item>
+        <item name="android:padding">6dp</item>
+        <item name="android:layout_margin">8dp</item>
+    </style>
+
+</resources>

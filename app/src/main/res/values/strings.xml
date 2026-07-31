@@ -1,0 +1,51 @@
+<resources>
+    <string name="app_name">SoS Measure</string>
+
+    <string name="preview_description">Most recent formed frame</string>
+    <string name="status_initial">SoS measurement — pick a method</string>
+    <string name="cell_readout_empty">—</string>
+
+    <string name="method_fixed">Fixed</string>
+    <string name="method_ae">AE</string>
+    <string name="method_ae_quant">AE_quant</string>
+    <string name="method_proposed">Proposed</string>
+
+    <string name="offload">Offload</string>
+    <string name="offload_url_default">http://192.168.50.10:8000</string>
+    <string name="offload_url_hint">http://server-ip:8000</string>
+
+    <string name="label_fixed_cell">Fixed cell  (row = gain  ↑  /  col = exposure →)</string>
+
+    <string name="label_digital_boost">Digital boost (virtual path)</string>
+    <string name="boost_1x">1×</string>
+    <string name="boost_2x">2×</string>
+    <string name="boost_4x">4×</string>
+
+    <string name="label_conf_threshold">Conf threshold:</string>
+
+    <string name="label_ae_strategy">AE strategy</string>
+    <string name="ae_phone">Phone AE</string>
+    <string name="ae_custom">Custom</string>
+
+    <string name="label_period">Proposed period (frames)</string>
+    <string name="period_5">5</string>
+    <string name="period_10">10</string>
+    <string name="period_15">15</string>
+    <string name="period_20">20</string>
+    <string name="period_25">25</string>
+    <string name="period_30">30</string>
+
+    <string name="label_fallback">Fallback strategy (when sum_conf=0)</string>
+    <string name="fallback_entropy">Entropy</string>
+    <string name="fallback_laplacian">LapVar</string>
+    <string name="fallback_tenengrad">Tenen</string>
+    <string name="fallback_crete">Crete</string>
+    <string name="fallback_safe">Safe</string>
+
+    <string name="btn_start">Start</string>
+    <string name="btn_stop">Stop</string>
+    <string name="btn_verify">Verify</string>
+    <string name="btn_verify_probe">VeriProbe</string>
+    <string name="btn_bench">Bench</string>
+    <string name="btn_iso_diag">IsoDiag</string>
+</resources>

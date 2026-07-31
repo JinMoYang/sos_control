@@ -1,0 +1,26 @@
+# Build output
+.gradle/
+build/
+captures/
+
+# Kotlin incremental compilation state
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Machine-specific SDK path — must not be committed
+local.properties
+
+# Keystores
+*.jks
+*.keystore
+
+# macOS
+.DS_Store
+
+# Measurement output, if a run directory is ever copied into the tree
+sos/
