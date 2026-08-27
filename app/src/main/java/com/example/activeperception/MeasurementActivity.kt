@@ -238,6 +238,29 @@ class MeasurementActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnExp51).setOnClickListener {
             start("exp5_1") { mc!!.runExp51CaptureGuardComparison(::post) }
         }
+        // Published sensing baselines (sense/BASELINES.md). Full sweep, hold = grid size —
+        // the sim's phys_full_hold25 convention (hold = N cells) on the 3x3 grid.
+        findViewById<Button>(R.id.btnPhysSweep).setOnClickListener {
+            val n = grid.nGain * grid.nShutter
+            start("physsweep_full_h$n") { mc!!.runPhysSweep(true, n, 300, ::post, ::onFrameWithOffload) }
+        }
+        findViewById<Button>(R.id.btnShinSel).setOnClickListener {
+            start("shin_sel") { mc!!.runShinSelect(300, ::post, ::onFrameWithOffload) }
+        }
+        findViewById<Button>(R.id.btnShinNM).setOnClickListener {
+            start("shin_nm") { mc!!.runShinNM("restart_int", 300, ::post, ::onFrameWithOffload) }
+        }
+        findViewById<Button>(R.id.btnNeuralAe).setOnClickListener {
+            // Weights: bundled asset, or the app files dir so a freshly trained .bin can be
+            // adb-pushed without rebuilding (sense/nae_train_app.py produces it).
+            val w = runCatching { assets.open("nae_hist_scalar_3x3.bin").use { it.readBytes() } }
+                .recoverCatching {
+                    java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").readBytes()
+                }.getOrNull()
+            if (w == null) {
+                post("NAE weights missing — train sense/nae_train_app.py, push nae_hist_scalar_3x3.bin to the app files dir")
+            } else start("nae") { mc!!.runNeuralAe(w, 300, ::post, ::onFrameWithOffload) }
+        }
         btnStop.setOnClickListener { stopMeasurement() }
 
         // The focus-first tap model exists for the glass touchpad only. On a phone it makes
@@ -816,7 +839,7 @@ class MeasurementActivity : AppCompatActivity() {
     private fun updateProfileSummary() {
         if (rayNeoTouchpad) return
         val exps = grid.exposuresUs.joinToString("/") { (it / 1000).toString() }
-        status.text = "${Build.MODEL} · vehicle-80 {2,3,5,7} · ${exps}ms · " +
+        status.text = "${Build.MODEL} · veh-V3 {1,2,3,5,7} · ${exps}ms · " +
             "ISO ${grid.gains.first()}-${grid.gains.last()} ×${grid.digitalBoost.toInt()}"
     }
 
@@ -988,7 +1011,8 @@ class MeasurementActivity : AppCompatActivity() {
                 "yolov8n_640_b9_fp16.tflite" to 9
             ),
             numClasses = 80,
-            allowed = setOf(2, 3, 5, 7),
+            // V3 signal classes (sense/proxy.py): bicycle, car, motorcycle, bus, truck.
+            allowed = setOf(1, 2, 3, 5, 7),
             accelerator = TfliteYoloDetector.Accelerator.GPU,
             allowFallback = false,
             gpuBackend = TfliteYoloDetector.GpuBackend.AUTO,

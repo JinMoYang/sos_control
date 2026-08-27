@@ -285,6 +285,24 @@
                     style="@style/Option.Narrow" android:text="@string/btn_iso_diag" />
             </LinearLayout>
 
+            <!-- Published sensing baselines (sense/BASELINES.md) as recorder modes. -->
+            <LinearLayout
+                style="@style/OptionRow"
+                android:layout_marginTop="4dp">
+
+                <Button android:id="@+id/btnPhysSweep"
+                    style="@style/Option.Narrow" android:text="PhysSw" />
+
+                <Button android:id="@+id/btnShinSel"
+                    style="@style/Option.Narrow" android:text="ShinSel" />
+
+                <Button android:id="@+id/btnShinNM"
+                    style="@style/Option.Narrow" android:text="ShinNM" />
+
+                <Button android:id="@+id/btnNeuralAe"
+                    style="@style/Option.Narrow" android:text="NAE" />
+            </LinearLayout>
+
             <Button android:id="@+id/btnExp21"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
