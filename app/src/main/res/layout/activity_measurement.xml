@@ -88,6 +88,24 @@
                     android:checked="true" />
             </RadioGroup>
 
+            <!-- Second method row: the published sensing baselines (sense/BASELINES.md).
+                 A separate RadioGroup because RadioGroup lays out one row; the Activity
+                 links the two into a single mutually-exclusive method choice. -->
+            <RadioGroup
+                android:id="@+id/methodGroup2"
+                style="@style/OptionRow"
+                android:layout_marginTop="0dp">
+
+                <RadioButton android:id="@+id/methodPhysSweep"
+                    style="@style/Option.Narrow" android:text="PhysSweep" />
+                <RadioButton android:id="@+id/methodShinSel"
+                    style="@style/Option.Narrow" android:text="ShinSel" />
+                <RadioButton android:id="@+id/methodShinNM"
+                    style="@style/Option.Narrow" android:text="ShinNM" />
+                <RadioButton android:id="@+id/methodNeuralAe"
+                    style="@style/Option.Narrow" android:text="NeuralAE" />
+            </RadioGroup>
+
             <!-- Cloud offload. The URL field is only read when the box is checked; otherwise
                  the `server_url` intent extra is used, if present. -->
             <LinearLayout
@@ -285,23 +303,14 @@
                     style="@style/Option.Narrow" android:text="@string/btn_iso_diag" />
             </LinearLayout>
 
-            <!-- Published sensing baselines (sense/BASELINES.md) as recorder modes. -->
-            <LinearLayout
-                style="@style/OptionRow"
-                android:layout_marginTop="4dp">
-
-                <Button android:id="@+id/btnPhysSweep"
-                    style="@style/Option.Narrow" android:text="PhysSw" />
-
-                <Button android:id="@+id/btnShinSel"
-                    style="@style/Option.Narrow" android:text="ShinSel" />
-
-                <Button android:id="@+id/btnShinNM"
-                    style="@style/Option.Narrow" android:text="ShinNM" />
-
-                <Button android:id="@+id/btnNeuralAe"
-                    style="@style/Option.Narrow" android:text="NAE" />
-            </LinearLayout>
+            <!-- On-device Neural-AE training: builds samples from the runs recorded on this
+                 phone and writes nae_hist_scalar_3x3.bin into the app files dir. -->
+            <Button android:id="@+id/btnTrainNae"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Train NAE (recorded runs)"
+                android:textSize="13sp" />
 
             <Button android:id="@+id/btnExp21"
                 android:layout_width="match_parent"

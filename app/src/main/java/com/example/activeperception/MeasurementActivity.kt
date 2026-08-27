@@ -188,11 +188,28 @@ class MeasurementActivity : AppCompatActivity() {
         // Must precede buildCellGrid so the cell labels render with the right effective ISO.
         grid.digitalBoost = boostFromCheckedId(boostGroup.checkedRadioButtonId)
         buildCellGrid()
+        // The two method rows act as ONE mutually-exclusive choice: checking in either
+        // group clears the other (guarded against the recursive clear callback).
+        val methodGroup2: RadioGroup = findViewById(R.id.methodGroup2)
+        var syncingMethodRows = false
         methodGroup.setOnCheckedChangeListener { _, id ->
+            if (id != -1 && !syncingMethodRows) {
+                syncingMethodRows = true; methodGroup2.clearCheck(); syncingMethodRows = false
+            }
             cellGridWrap.visibility = if (id == R.id.methodFixed) View.VISIBLE else View.GONE
             proposedSettings.visibility = if (id == R.id.methodProposed) View.VISIBLE else View.GONE
             aeSettings.visibility =
                 if (id == R.id.methodAe || id == R.id.methodAeQuant) View.VISIBLE else View.GONE
+        }
+        methodGroup2.setOnCheckedChangeListener { _, id ->
+            if (id != -1 && !syncingMethodRows) {
+                syncingMethodRows = true; methodGroup.clearCheck(); syncingMethodRows = false
+            }
+            if (id != -1) {
+                cellGridWrap.visibility = View.GONE
+                proposedSettings.visibility = View.GONE
+                aeSettings.visibility = View.GONE
+            }
         }
         // Initial state mirrors the default-checked methodProposed radio.
         cellGridWrap.visibility = View.GONE
@@ -238,29 +255,7 @@ class MeasurementActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnExp51).setOnClickListener {
             start("exp5_1") { mc!!.runExp51CaptureGuardComparison(::post) }
         }
-        // Published sensing baselines (sense/BASELINES.md). Full sweep, hold = grid size —
-        // the sim's phys_full_hold25 convention (hold = N cells) on the 3x3 grid.
-        findViewById<Button>(R.id.btnPhysSweep).setOnClickListener {
-            val n = grid.nGain * grid.nShutter
-            start("physsweep_full_h$n") { mc!!.runPhysSweep(true, n, 300, ::post, ::onFrameWithOffload) }
-        }
-        findViewById<Button>(R.id.btnShinSel).setOnClickListener {
-            start("shin_sel") { mc!!.runShinSelect(300, ::post, ::onFrameWithOffload) }
-        }
-        findViewById<Button>(R.id.btnShinNM).setOnClickListener {
-            start("shin_nm") { mc!!.runShinNM("restart_int", 300, ::post, ::onFrameWithOffload) }
-        }
-        findViewById<Button>(R.id.btnNeuralAe).setOnClickListener {
-            // Weights: bundled asset, or the app files dir so a freshly trained .bin can be
-            // adb-pushed without rebuilding (sense/nae_train_app.py produces it).
-            val w = runCatching { assets.open("nae_hist_scalar_3x3.bin").use { it.readBytes() } }
-                .recoverCatching {
-                    java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").readBytes()
-                }.getOrNull()
-            if (w == null) {
-                post("NAE weights missing — train sense/nae_train_app.py, push nae_hist_scalar_3x3.bin to the app files dir")
-            } else start("nae") { mc!!.runNeuralAe(w, 300, ::post, ::onFrameWithOffload) }
-        }
+        findViewById<Button>(R.id.btnTrainNae).setOnClickListener { trainNaeFromRecordings() }
         btnStop.setOnClickListener { stopMeasurement() }
 
         // The focus-first tap model exists for the glass touchpad only. On a phone it makes
@@ -496,10 +491,79 @@ class MeasurementActivity : AppCompatActivity() {
         cellButtons.getOrNull(cell)?.setBackgroundColor(active)
     }
 
+    /** nae-bin-v1 weights: a freshly trained file in the app files dir wins over the
+     *  bundled asset, so Train NAE takes effect without a rebuild. */
+    private fun loadNaeWeights(): ByteArray? =
+        runCatching {
+            java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").readBytes()
+        }.recoverCatching {
+            assets.open("nae_hist_scalar_3x3.bin").use { it.readBytes() }
+        }.getOrNull()
+
+    /** On-device Neural-AE training from every Proposed run recorded on this phone
+     *  (Documents/sos preferred, app-private fallback). Runs on its own thread; writes the
+     *  nae-bin-v1 into the app files dir where [loadNaeWeights] picks it up first. */
+    private fun trainNaeFromRecordings() {
+        if (runActive) { post("busy — stop first"); return }
+        Thread({
+            try {
+                val roots = listOf(
+                    java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
+                        android.os.Environment.DIRECTORY_DOCUMENTS), "sos"),
+                    java.io.File(getExternalFilesDir(null), "sos"))
+                val runs = roots.filter { it.isDirectory }
+                    .flatMap { it.listFiles()?.toList() ?: emptyList() }
+                    .filter { it.isDirectory && it.name.startsWith("run_proposed") }
+                post("NAE train: scanning ${runs.size} Proposed runs…")
+                val samples = ArrayList<com.example.activeperception.acquire.NaeTrainer.Sample>()
+                for (r in runs) {
+                    samples += NaeTraining.samplesFromRun(r, grid)
+                    post("NAE train: ${samples.size} samples after ${r.name}")
+                }
+                if (samples.size < 20) {
+                    post("NAE train: only ${samples.size} samples — record more Proposed runs first")
+                    return@Thread
+                }
+                val bin = com.example.activeperception.acquire.NaeTrainer().train(samples) { ep, tr, va ->
+                    post("NAE train: epoch $ep loss ${"%.4f".format(tr)} val ${"%.4f".format(va)}")
+                }
+                java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").writeBytes(bin)
+                post("NAE trained: ${samples.size} samples → nae_hist_scalar_3x3.bin (${bin.size} B)")
+            } catch (e: Exception) {
+                post("NAE train error: ${e.message}")
+            }
+        }, "SoS-NaeTrainer").also { it.isDaemon = true }.start()
+    }
+
     private fun startSelectedMethod() {
         // GT-reference checkbox removed from UI; hardcoded false. Re-add a flag plumb
         // if a GT pass mode is needed (or a long-press gesture on Start to toggle).
         val gtRef = false
+        // Second method row (baselines) — mutually exclusive with methodGroup, so at most
+        // one of the two groups has a checked id.
+        when (findViewById<RadioGroup>(R.id.methodGroup2).checkedRadioButtonId) {
+            R.id.methodPhysSweep -> {
+                val n = grid.nGain * grid.nShutter
+                start("physsweep_full_h$n") {
+                    mc!!.runPhysSweep(true, n, 300, ::post, ::onFrameWithOffload)
+                }
+                return
+            }
+            R.id.methodShinSel -> {
+                start("shin_sel") { mc!!.runShinSelect(300, ::post, ::onFrameWithOffload) }
+                return
+            }
+            R.id.methodShinNM -> {
+                start("shin_nm") { mc!!.runShinNM("restart_int", 300, ::post, ::onFrameWithOffload) }
+                return
+            }
+            R.id.methodNeuralAe -> {
+                val w = loadNaeWeights()
+                if (w == null) post("NAE weights missing — Train NAE below, or push nae_hist_scalar_3x3.bin to the app files dir")
+                else start("nae") { mc!!.runNeuralAe(w, 300, ::post, ::onFrameWithOffload) }
+                return
+            }
+        }
         when (methodGroup.checkedRadioButtonId) {
             R.id.methodFixed -> {
                 val (gi, sj) = grid.indices(selectedCell)
