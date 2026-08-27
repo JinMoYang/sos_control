@@ -2915,9 +2915,12 @@ class MeasurementController(
             val profile: RawSensorCapturer.CaptureProfile?
         )
         val configs = raw.availableRawStreamConfigs()
-        val raw10 = configs.firstOrNull { it.format == ImageFormat.RAW10 }
-            ?: error("EXP5.5 requires RAW10")
         val rawSensor = configs.firstOrNull { it.format == ImageFormat.RAW_SENSOR }
+        // Prefer RAW10 (RayNeo camera 0); fall back to RAW_SENSOR on devices whose main
+        // camera exposes only RAW16 (e.g. Galaxy S25) — decode handles both formats.
+        val raw10 = configs.firstOrNull { it.format == ImageFormat.RAW10 }
+            ?: rawSensor
+            ?: error("EXP5.5 requires RAW10 or RAW_SENSOR")
         val optimizedDetector = detector as? com.example.activeperception.acquire.TfliteYoloDetector
             ?: error("EXP5.5 requires TfliteYoloDetector")
         val fastEnabled = persistentFastCapture || deepSinglePrefetch
@@ -3050,7 +3053,9 @@ class MeasurementController(
                 val meta = packet.metas.firstOrNull()
                 val metadataMatch = packet.metas.size == packet.nBurst && packet.metas.all {
                     kotlin.math.abs(it.appliedExpUs - packet.requestedExpUs) <= 750L &&
-                        it.appliedIso == grid.baseGain }
+                        // The S25 HAL quantizes applied sensitivity (req 100 -> applied 99);
+                        // mirror the scheduler's tolerance instead of exact base gain.
+                        kotlin.math.abs(it.appliedIso - grid.baseGain) <= 8 }
                 val requestToApplied = meta?.timestamp?.let {
                     (it - packet.startedSensorNs).coerceAtLeast(0L) / 1e6
                 } ?: Double.NaN

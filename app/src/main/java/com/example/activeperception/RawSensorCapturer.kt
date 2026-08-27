@@ -144,6 +144,10 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         var lastDecodeEndNs = 0L
         var decodeCpuNs = 0L
         var failures = 0
+        /** Frames whose metadata missed the request (settling) — skipped, not fatal. */
+        var settlingSkips = 0
+        /** Extra requests submitted to replace settling frames, bounded by the guard. */
+        var resubmits = 0
         var error: Throwable? = null
     }
 
@@ -185,6 +189,11 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     var sensorOrientation: Int = 0; private set
     var streamFormat: Int = ImageFormat.RAW_SENSOR; private set
     val streamFormatName: String get() = formatName(streamFormat)
+    /** Min frame duration of the ACTIVE RAW stream, from the stream configuration map;
+     *  falls back to the RayNeo-measured 33.329ms when the HAL reports none. Querying the
+     *  advertised value instead of pinning the constant lets the same code drive the S25's
+     *  60fps RAW16 stream and the RayNeo's 30fps RAW10 stream without device branches. */
+    @Volatile var streamMinFrameDurationNs: Long = BASE_FRAME_DURATION_NS; private set
 
     private val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private lateinit var chars: CameraCharacteristics
@@ -207,7 +216,10 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     private val imageHandler = Handler(imageThread.looper)
     @Volatile private var decodePool = Executors.newFixedThreadPool(4)
     @Volatile var decodeThreadCount: Int = 4; private set
-    private val scheduler = SensorStateScheduler()
+    // isoTolerance: the S25 HAL quantizes applied sensitivity (req 100 -> applied 99,
+    // 400 -> 398), so exact ISO matching never approves a frame there. 8 covers the
+    // observed <=0.5% rounding up to ISO 1600 while staying far below the 2x grid spacing.
+    private val scheduler = SensorStateScheduler(isoTolerance = 8)
     private val nativeValidationRemaining = AtomicInteger(0)
     private val continuousResults = ConcurrentHashMap<Long, TotalCaptureResult>()
     private val continuousResultLock = java.lang.Object()
@@ -258,6 +270,9 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         captureHeight = height
         reader = ImageReader.newInstance(width, height, ImageFormat.RAW_SENSOR, MAX_IMAGES)
         streamFormat = ImageFormat.RAW_SENSOR
+        streamMinFrameDurationNs = (chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?.getOutputMinFrameDuration(ImageFormat.RAW_SENSOR, size) ?: 0L)
+            .takeIf { it > 0L } ?: BASE_FRAME_DURATION_NS
 
         val opened = CountDownLatch(1)
         manager.openCamera(CAMERA_ID, object : CameraDevice.StateCallback() {
@@ -335,6 +350,9 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
 
         width = requestedWidth; height = requestedHeight
         captureWidth = width; captureHeight = height; streamFormat = format
+        streamMinFrameDurationNs = (chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?.getOutputMinFrameDuration(format, android.util.Size(width, height)) ?: 0L)
+            .takeIf { it > 0L } ?: BASE_FRAME_DURATION_NS
         reader = ImageReader.newInstance(width, height, format, MAX_IMAGES)
         val configured = CountDownLatch(1)
         @Suppress("DEPRECATION")
@@ -435,11 +453,11 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                     val target = fastTargets[commandId] ?: return@execute
                     val actual = result.sensorState()
                     if (!scheduler.matches(target.expected, actual)) {
-                        synchronized(target.lock) {
-                            target.error = IllegalStateException(
-                                "Fast capture metadata mismatch: requested=${target.expected}, actual=$actual")
-                            target.lock.notifyAll()
-                        }
+                        // Settling frame: a HAL may deliver a tagged request's frame with
+                        // pre-settling metadata (seen on the S25 from a cold stream). Skip
+                        // it — the result callback resubmits the slot — rather than failing
+                        // the whole capture.
+                        synchronized(target.lock) { target.settlingSkips++ }
                         return@execute
                     }
                     val decodeStart = System.nanoTime()
@@ -506,6 +524,15 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                 }
                 fastResults[ts] = result
                 synchronized(fastResultLock) { fastResultLock.notifyAll() }
+                // Replace a settling frame's slot so exact-N still completes; bounded so a
+                // persistently wrong HAL state cannot loop forever.
+                if (!scheduler.matches(target.expected, actual)) {
+                    val resubmit = synchronized(target.lock) {
+                        if (target.resubmits < SETTING_GUARD_FRAMES) { target.resubmits++; true }
+                        else false
+                    }
+                    if (resubmit) runCatching { session.capture(request, this, cameraHandler) }
+                }
             }
 
             override fun onCaptureFailed(
@@ -594,6 +621,14 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
                 }
                 fastResults[ts] = result
                 synchronized(fastResultLock) { fastResultLock.notifyAll() }
+                // Same settling-slot replacement as captureFast.
+                if (!scheduler.matches(target.expected, actual)) {
+                    val resubmit = synchronized(target.lock) {
+                        if (target.resubmits < SETTING_GUARD_FRAMES) { target.resubmits++; true }
+                        else false
+                    }
+                    if (resubmit) runCatching { session.capture(request, this, cameraHandler) }
+                }
             }
 
             override fun onCaptureFailed(
@@ -920,7 +955,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             set(CaptureRequest.SENSOR_EXPOSURE_TIME, expected.exposureUs * 1_000L)
             set(CaptureRequest.SENSOR_SENSITIVITY, expected.iso)
             set(CaptureRequest.SENSOR_FRAME_DURATION,
-                max(BASE_FRAME_DURATION_NS, expected.exposureUs * 1_000L + 1_000_000L))
+                max(streamMinFrameDurationNs, expected.exposureUs * 1_000L + 1_000_000L))
             setTag(commandId)
             addTarget(reader!!.surface)
         }.build()

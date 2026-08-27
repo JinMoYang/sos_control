@@ -37,6 +37,7 @@ import androidx.core.view.WindowInsetsCompat
 import com.example.activeperception.acquire.Detection
 import com.example.activeperception.acquire.Grid
 import com.example.activeperception.acquire.RAYNEO_X3_PRO_3x3
+import com.example.activeperception.acquire.REAL_3x3_INDOOR
 import com.example.activeperception.acquire.TfliteYoloDetector
 import org.json.JSONObject
 import java.io.File
@@ -57,7 +58,10 @@ class MeasurementActivity : AppCompatActivity() {
         private const val START_DISPATCH_ALLOWANCE_NS = 10_000_000L
     }
 
-    private val grid: Grid = RAYNEO_X3_PRO_3x3
+    // Device profile: each grid's base exposure nearly fills its device's RAW frame period
+    // (RayNeo 32ms/33.3ms, S25 16ms/16.7ms), so burst-summing stays gap-free on both.
+    private val grid: Grid = if (Build.MANUFACTURER.equals("RayNeo", ignoreCase = true))
+        RAYNEO_X3_PRO_3x3 else REAL_3x3_INDOOR
     private lateinit var raw: RawSensorCapturer
     private lateinit var detector: TfliteYoloDetector
     private lateinit var sensors: SensorDataManager
