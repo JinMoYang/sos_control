@@ -18,6 +18,7 @@ import com.example.activeperception.acquire.RoutingDecision
 import com.example.activeperception.acquire.RawFrame
 import com.example.activeperception.acquire.NaeFeatures
 import com.example.activeperception.acquire.NaeSnap
+import com.example.activeperception.acquire.NaeTrainer
 import com.example.activeperception.acquire.NelderMead
 import com.example.activeperception.acquire.NeuralAeNet
 import com.example.activeperception.acquire.RegimeClassifier
@@ -623,6 +624,120 @@ class MeasurementController(
             f++
         }
         endPass()
+    }
+
+    /**
+     * Neural-AE training-data collection. This is not a control policy — it exists to
+     * manufacture the ONE thing training needs and a deployed run cannot give: a
+     * counterfactual surface. Every step is a full-grid probe (one burst, all cells formed
+     * virtually, one batched inference), so the whole grid is scored at every step; step
+     * t's samples are then labelled from step t+1's argmax:
+     *
+     *     feature = multi-scale histogram of the image at cell c
+     *     label   = ln( e(argmax S_{t+1}) / e(c) ), clamped to +-ln10
+     *
+     * [cellsPerStep] cells are sampled per step (the policy cell plus random others) rather
+     * than only the cell a policy would sit on: a controller parked at the optimum would
+     * only ever produce label 0, teaching "never move". Sampling across the grid is what
+     * teaches "this image is too dark -> lengthen exposure", and it is free because the
+     * burst already formed every cell.
+     *
+     * A step contributes nothing when the NEXT step's surface is all zero — with no
+     * detection anywhere the argmax is arbitrary and the label would be noise. Scenes
+     * without vehicles therefore yield no samples however long they run, which is why the
+     * status line reports samples, not frames.
+     *
+     * Appends to [dataset] and returns how many samples were written.
+     */
+    fun runNaeCollect(dataset: java.io.File, targetSamples: Int, maxFrames: Int,
+                      cellsPerStep: Int = 3,
+                      onStatus: (String) -> Unit,
+                      onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }): Int {
+        startPass("nae_collect", isGtReference = false, methodParams = JSONObject()
+            .put("purpose", "neural_ae_training_data")
+            .put("probe", "full_grid_every_step")
+            .put("cells_per_step", cellsPerStep)
+            .put("target_samples", targetSamples)
+            .put("label", "ln(e_argmax_next / e_cell) clamped to +-ln10")
+            .put("supervision", "v3 sumconf surface"))
+        logger.csv("candidates", listOf("frame", "cell", "gain", "exposure_us",
+            "sum_conf", "chosen", "tie_break"))
+        val source = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        val allCells = IntArray(grid.nGain * grid.nShutter) { it }
+        val lnM = 2.302585092994046
+        // Samples held from the previous step, waiting for this step's surface to label them.
+        var pending: List<Pair<Int, FloatArray>> = emptyList()
+        var rng = 0x5DEECE66DL
+        fun nextInt(bound: Int): Int {
+            rng = (rng * 6364136223846793005L + 1442695040888963407L)
+            return (((rng ushr 33).toInt() % bound) + bound) % bound
+        }
+        var anchor = grid.cell(grid.nGain - 1, 0)
+        var written = 0
+        var f = 0
+        while (running && f < maxFrames && written < targetSamples) {
+            val t0 = now()
+            val frames = raw.capture(grid.fastestExposureUs, grid.baseGain, grid.maxBurst)
+            if (frames.isEmpty()) break
+            val tf = now()
+            val bitmaps = source.formAllCells(frames, allCells)
+            val formMs = ms(tf)
+            val ti = now(); val detsAll = detector.detectBatch(bitmaps); val inferMs = ms(ti)
+            val scores = DoubleArray(allCells.size) { Signal.sumConfV3(detsAll[it], selectConf) }
+
+            // Label the previous step's samples from this step's argmax.
+            var best = 0
+            for (k in scores.indices) if (scores[k] > scores[best]) best = k
+            if (pending.isNotEmpty() && scores[best] > 0.0) {
+                val eBest = NaeSnap.cellE(allCells[best], grid.gains, grid.exposuresUs)
+                val batch = pending.map { (cell, hist) ->
+                    val e = NaeSnap.cellE(cell, grid.gains, grid.exposuresUs)
+                    NaeTrainer.Sample(hist, Math.log(eBest / e).coerceIn(-lnM, lnM))
+                }
+                NaeDataset.append(dataset, batch)
+                written += batch.size
+            }
+            pending = emptyList()
+
+            // Policy cell (argmax, hold on an empty surface) drives the preview and is
+            // always one of the sampled cells.
+            val chosen = if (scores[best] > 0.0) best else allCells.indexOf(anchor).coerceAtLeast(0)
+            anchor = allCells[chosen]
+            val picks = LinkedHashSet<Int>()
+            picks.add(chosen)
+            var guard = 0
+            while (picks.size < minOf(cellsPerStep, allCells.size) && guard++ < 64) {
+                picks.add(nextInt(allCells.size))
+            }
+            pending = picks.map { k ->
+                val bmp = bitmaps[k]
+                val px = IntArray(bmp.width * bmp.height)
+                bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+                val lum = ShinMetric.lumFromArgb(px, bmp.width, bmp.height)
+                allCells[k] to NaeFeatures.multiScaleHist(lum, bmp.width, bmp.height)
+            }
+
+            val totalMs = ms(t0)
+            for (k in allCells.indices) {
+                val (gi, sj) = grid.indices(allCells[k])
+                logger.row("candidates", listOf(f, allCells[k], effIso(grid.gains[gi]),
+                    grid.exposuresUs[sj], "%.5f".format(scores[k]),
+                    if (k == chosen) 1 else 0, if (k == chosen) "collect" else ""))
+            }
+            val (gi, sj) = grid.indices(anchor)
+            val gainVal = grid.gains[gi]; val expUs = grid.exposuresUs[sj]
+            val path = logger.saveJpegAsync("${frameName(f)}_cell${anchor}", bitmaps[chosen])
+            logFrame(f, "nae_collect", anchor, gainVal, expUs, allCells.size, true,
+                formMs, inferMs, totalMs, detsAll[chosen], path, tieBreak = "collect")
+            onFrame(bitmaps[chosen], detsAll[chosen], effIso(gainVal), expUs)
+            onStatus("NAE collect: $written/$targetSamples samples · frame $f/$maxFrames" +
+                if (scores[best] <= 0.0) " · no detections — point at vehicles" else
+                    " · best=${"%.2f".format(scores[best])}")
+            f++
+        }
+        endPass()
+        return written
     }
 
     // ---------- AE ----------

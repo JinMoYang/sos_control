@@ -56,6 +56,13 @@ class MeasurementActivity : AppCompatActivity() {
     companion object {
         private const val RAYNEO_FRAME_PERIOD_NS = 33_329_000L
         private const val START_DISPATCH_ALLOWANCE_NS = 10_000_000L
+        /** Neural-AE collection budget — see [trainNaeFromRecordings]. 3 cells x ~200
+         *  probe steps; the cap bounds a scene that yields nothing. */
+        private const val NAE_CELLS_PER_STEP = 3
+        private const val NAE_TARGET_SAMPLES = 600
+        private const val NAE_MAX_FRAMES = 600
+        /** Below this the pool is too small to hold out a meaningful validation split. */
+        private const val NAE_MIN_TRAIN = 300
     }
 
     // Device profile: each grid's base exposure nearly fills its device's RAW frame period
@@ -500,39 +507,36 @@ class MeasurementActivity : AppCompatActivity() {
             assets.open("nae_hist_scalar_3x3.bin").use { it.readBytes() }
         }.getOrNull()
 
-    /** On-device Neural-AE training from every Proposed run recorded on this phone
-     *  (Documents/sos preferred, app-private fallback). Runs on its own thread; writes the
-     *  nae-bin-v1 into the app files dir where [loadNaeWeights] picks it up first. */
+    /** Neural-AE data collection followed by training, both on the phone. Collection is a
+     *  measurement pass like any other (Stop ends it early and still trains on whatever
+     *  reached the pool), so it goes through [start]; training then runs on the same
+     *  worker and writes the weights where [loadNaeWeights] looks first.
+     *
+     *  Budget: [NAE_TARGET_SAMPLES] samples at [NAE_CELLS_PER_STEP] per step is ~200
+     *  full-grid probe steps, and a probe step measured ~0.5 s on the S25 — under two
+     *  minutes of pointing the phone at traffic. The frame cap bounds a scene that never
+     *  detects anything; samples accumulate across presses, so several scenes can be
+     *  collected before the pool is large enough. */
     private fun trainNaeFromRecordings() {
-        if (runActive) { post("busy — stop first"); return }
-        Thread({
-            try {
-                val roots = listOf(
-                    java.io.File(android.os.Environment.getExternalStoragePublicDirectory(
-                        android.os.Environment.DIRECTORY_DOCUMENTS), "sos"),
-                    java.io.File(getExternalFilesDir(null), "sos"))
-                val runs = roots.filter { it.isDirectory }
-                    .flatMap { it.listFiles()?.toList() ?: emptyList() }
-                    .filter { it.isDirectory && it.name.startsWith("run_proposed") }
-                post("NAE train: scanning ${runs.size} Proposed runs…")
-                val samples = ArrayList<com.example.activeperception.acquire.NaeTrainer.Sample>()
-                for (r in runs) {
-                    samples += NaeTraining.samplesFromRun(r, grid)
-                    post("NAE train: ${samples.size} samples after ${r.name}")
-                }
-                if (samples.size < 20) {
-                    post("NAE train: only ${samples.size} samples — record more Proposed runs first")
-                    return@Thread
-                }
-                val bin = com.example.activeperception.acquire.NaeTrainer().train(samples) { ep, tr, va ->
-                    post("NAE train: epoch $ep loss ${"%.4f".format(tr)} val ${"%.4f".format(va)}")
-                }
-                java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").writeBytes(bin)
-                post("NAE trained: ${samples.size} samples → nae_hist_scalar_3x3.bin (${bin.size} B)")
-            } catch (e: Exception) {
-                post("NAE train error: ${e.message}")
+        val dataset = java.io.File(getExternalFilesDir(null), "nae_dataset.bin")
+        val already = NaeDataset.count(dataset)
+        start("nae_collect") {
+            post("NAE collect: pool has $already samples — collecting…")
+            val added = mc!!.runNaeCollect(dataset, NAE_TARGET_SAMPLES, NAE_MAX_FRAMES,
+                NAE_CELLS_PER_STEP, ::post, ::onFrameWithOffload)
+            val samples = NaeDataset.load(dataset)
+            if (samples.size < NAE_MIN_TRAIN) {
+                post("NAE: +$added → ${samples.size} samples, need $NAE_MIN_TRAIN — " +
+                    "press again on a scene with vehicles")
+                return@start
             }
-        }, "SoS-NaeTrainer").also { it.isDaemon = true }.start()
+            post("NAE train: ${samples.size} samples (+$added new)…")
+            val bin = com.example.activeperception.acquire.NaeTrainer().train(samples) { ep, tr, va ->
+                if (ep % 5 == 0) post("NAE train: epoch $ep loss ${"%.4f".format(tr)} val ${"%.4f".format(va)}")
+            }
+            java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").writeBytes(bin)
+            post("NAE ready: trained on ${samples.size} samples — select NeuralAE and Start")
+        }
     }
 
     private fun startSelectedMethod() {
