@@ -1,0 +1,56 @@
+<resources>
+    <string name="app_name">RayNeo SoS</string>
+
+    <string name="preview_description">Most recent formed frame</string>
+    <string name="status_initial">RayNeo SoS — optimized pipeline ready</string>
+    <string name="touchpad_help">TOUCHPAD · Swipe: focus · Tap: select · Hold: Start/Stop · Back: Stop/Exit</string>
+    <string name="cell_readout_empty">—</string>
+
+    <string name="method_fixed">Fixed</string>
+    <string name="method_ae">AE</string>
+    <string name="method_ae_quant">AE_quant</string>
+    <string name="method_proposed">Proposed</string>
+
+    <string name="offload">Offload</string>
+    <string name="offload_url_default">http://192.168.50.10:8000</string>
+    <string name="offload_url_hint">http://server-ip:8000</string>
+
+    <string name="label_fixed_cell">Fixed cell  (row = gain  ↑  /  col = exposure →)</string>
+
+    <string name="label_digital_boost">Digital boost (virtual path)</string>
+    <string name="boost_1x">1×</string>
+    <string name="boost_2x">2×</string>
+    <string name="boost_4x">4×</string>
+
+    <string name="label_conf_threshold">Conf threshold:</string>
+
+    <string name="label_ae_strategy">AE strategy</string>
+    <string name="ae_phone">Phone AE</string>
+    <string name="ae_custom">Custom</string>
+
+    <string name="label_period">Proposed period (frames)</string>
+    <string name="period_5">5</string>
+    <string name="period_9">9</string>
+    <string name="period_12">12</string>
+
+    <string name="label_fallback">Fallback strategy (when sum_conf=0)</string>
+    <string name="fallback_entropy">Entropy</string>
+    <string name="fallback_laplacian">LapVar</string>
+    <string name="fallback_tenengrad">Tenen</string>
+    <string name="fallback_crete">Crete</string>
+    <string name="fallback_safe">Safe</string>
+
+    <string name="btn_start">Start</string>
+    <string name="btn_rotation_start">Rotation Start</string>
+    <string name="btn_stop">Stop</string>
+    <string name="btn_verify">Verify</string>
+    <string name="btn_verify_probe">VeriProbe</string>
+    <string name="btn_bench">Bench</string>
+    <string name="btn_iso_diag">IsoDiag</string>
+    <string name="btn_exp21">EXP2.1 · Native NEON</string>
+    <string name="btn_exp22">EXP2.2 · Decode/NMS Opt</string>
+    <string name="btn_exp23">EXP2.3 · COCO5 Decoder vs Model</string>
+    <string name="btn_exp3">EXP3 · Integrated vs EXP1-A</string>
+    <string name="btn_exp4">EXP4 · Pipelined P=5</string>
+    <string name="btn_exp51">EXP5.1 · RAW Guard A/B/C</string>
+</resources>

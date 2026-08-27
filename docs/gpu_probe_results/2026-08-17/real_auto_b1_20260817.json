@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "run_id": "real_auto_b1_20260817",
+  "status": "success",
+  "milestone": "closed_cleanly",
+  "package": "com.sos.rayneox3",
+  "process": "com.sos.rayneox3:gpu_probe",
+  "pid": 8297,
+  "manufacturer": "RayNeo",
+  "model": "ARGF20",
+  "sdk": 32,
+  "gpu_backend_requested": "AUTO",
+  "batch": 1,
+  "iterations_requested": 2,
+  "input_source": "\/sdcard\/Android\/data\/com.sos.rayneox3\/files\/sos\/run_proposed_p5_safe_1786951423884\/img\/frame_0000_cell6_iso800_exp32ms.jpg",
+  "started_at_ms": 1786953032470,
+  "updated_at_ms": 1786953034013,
+  "elapsed_ms": 1543,
+  "pss_kb": 98725,
+  "asset": "yolov8n_640_fp16.tflite",
+  "init_ms": 469.033385,
+  "warmup_ms": 279.808906,
+  "warmup_detections": 7,
+  "warmup_outputs": [
+    {
+      "count": 7,
+      "sum_conf": 0.606414794921875,
+      "classes": [
+        9,
+        72,
+        72,
+        62,
+        62,
+        67,
+        63
+      ],
+      "confidences": [
+        0.013427734375,
+        0.070556640625,
+        0.036224365234375,
+        0.1417236328125,
+        0.07080078125,
+        0.1285400390625,
+        0.1451416015625
+      ]
+    }
+  ],
+  "samples": [
+    {
+      "iteration": 1,
+      "total_ms": 240.991615,
+      "preprocess_ms": 113.743593,
+      "gpu_run_ms": 85.822188,
+      "decode_ms": 40.217656,
+      "detections": 7,
+      "output_items": 1,
+      "outputs": [
+        {
+          "count": 7,
+          "sum_conf": 0.606414794921875,
+          "classes": [
+            9,
+            72,
+            72,
+            62,
+            62,
+            67,
+            63
+          ],
+          "confidences": [
+            0.013427734375,
+            0.070556640625,
+            0.036224365234375,
+            0.1417236328125,
+            0.07080078125,
+            0.1285400390625,
+            0.1451416015625
+          ]
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "total_ms": 231.495937,
+      "preprocess_ms": 112.622656,
+      "gpu_run_ms": 85.502969,
+      "decode_ms": 32.102864,
+      "detections": 7,
+      "output_items": 1,
+      "outputs": [
+        {
+          "count": 7,
+          "sum_conf": 0.606414794921875,
+          "classes": [
+            9,
+            72,
+            72,
+            62,
+            62,
+            67,
+            63
+          ],
+          "confidences": [
+            0.013427734375,
+            0.070556640625,
+            0.036224365234375,
+            0.1417236328125,
+            0.07080078125,
+            0.1285400390625,
+            0.1451416015625
+          ]
+        }
+      ]
+    }
+  ],
+  "close_ms": 83.511354
+}

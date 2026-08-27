@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "run_id": "auto_b1_20260817",
+  "status": "success",
+  "milestone": "closed_cleanly",
+  "package": "com.sos.rayneox3",
+  "process": "com.sos.rayneox3:gpu_probe",
+  "pid": 7990,
+  "manufacturer": "RayNeo",
+  "model": "ARGF20",
+  "sdk": 32,
+  "gpu_backend_requested": "AUTO",
+  "batch": 1,
+  "iterations_requested": 3,
+  "started_at_ms": 1786952484167,
+  "updated_at_ms": 1786952500709,
+  "elapsed_ms": 16542,
+  "pss_kb": 105064,
+  "asset": "yolov8n_640_fp16.tflite",
+  "init_ms": 15341.099369,
+  "warmup_ms": 263.894896,
+  "warmup_detections": 0,
+  "samples": [
+    {
+      "iteration": 1,
+      "total_ms": 219.310833,
+      "preprocess_ms": 99.118906,
+      "gpu_run_ms": 85.311563,
+      "decode_ms": 33.548333,
+      "detections": 0,
+      "output_items": 1
+    },
+    {
+      "iteration": 2,
+      "total_ms": 209.181927,
+      "preprocess_ms": 93.706979,
+      "gpu_run_ms": 85.642605,
+      "decode_ms": 27.887083,
+      "detections": 0,
+      "output_items": 1
+    },
+    {
+      "iteration": 3,
+      "total_ms": 203.936822,
+      "preprocess_ms": 91.217552,
+      "gpu_run_ms": 83.729843,
+      "decode_ms": 25.869427,
+      "detections": 0,
+      "output_items": 1
+    }
+  ],
+  "close_ms": 30.677239
+}

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The measurement UI is deliberately dark: it runs while the camera is pointed at the
+         scene being measured, and a bright panel would light that scene up. -->
+    <color name="bg_preview">#FF000000</color>
+    <color name="bg_controls">#FF101010</color>
+    <color name="scrim">#80000000</color>
+
+    <color name="text_primary">#FFFFFFFF</color>
+    <color name="text_label">#FFAAAAAA</color>
+    <color name="text_hint">#FF888888</color>
+    <color name="text_readout">#FFFFE060</color>
+
+    <!-- Fixed-mode cell buttons; applied from MeasurementActivity.setSelectedCell. -->
+    <color name="cell_unselected">#FF444444</color>
+    <color name="cell_selected">#FFE06040</color>
+</resources>

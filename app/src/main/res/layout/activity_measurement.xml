@@ -1,0 +1,339 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Vertical in portrait, horizontal in landscape. MeasurementActivity.applyOrientation swaps
+     the orientation and the two children's layout params directly, so configChanges keeps the
+     Activity alive and the camera and model are never reloaded on rotation. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/rootLayout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg_preview">
+
+    <FrameLayout
+        android:id="@+id/previewWrap"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <!-- fitCenter must stay in sync with OverlayView, which reproduces the same mapping
+             to place detection boxes. -->
+        <ImageView
+            android:id="@+id/previewImage"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="fitCenter"
+            android:contentDescription="@string/preview_description" />
+
+        <com.example.activeperception.OverlayView
+            android:id="@+id/overlayView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/statusText"
+            style="@style/PreviewOverlayText"
+            android:text="@string/status_initial"
+            android:textColor="@color/text_primary"
+            android:layout_gravity="top|start" />
+
+        <!-- ISO + exposure of the cell that produced the frame on screen. -->
+        <TextView
+            android:id="@+id/cellText"
+            style="@style/PreviewOverlayText"
+            android:text="@string/cell_readout_empty"
+            android:textColor="@color/text_readout"
+            android:fontFamily="monospace"
+            android:layout_gravity="top|end" />
+    </FrameLayout>
+
+    <!-- Scrollable because the stacked controls exceed the available height in landscape.
+         controlsInner is padded by the window-inset listener in MeasurementActivity. -->
+    <ScrollView
+        android:id="@+id/controls"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/bg_controls"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:id="@+id/controlsInner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="8dp">
+
+            <TextView
+                android:id="@+id/touchpadHelp"
+                style="@style/SectionLabel"
+                android:layout_marginTop="0dp"
+                android:layout_marginBottom="3dp"
+                android:text="@string/touchpad_help"
+                android:textColor="@color/text_readout"
+                android:textSize="10sp" />
+
+            <!-- Method. Each selection shows its own settings section below. -->
+            <RadioGroup
+                android:id="@+id/methodGroup"
+                style="@style/OptionRow"
+                android:layout_marginTop="0dp">
+
+                <RadioButton android:id="@+id/methodFixed"
+                    style="@style/Option" android:text="@string/method_fixed" />
+                <RadioButton android:id="@+id/methodAe"
+                    style="@style/Option" android:text="@string/method_ae" />
+                <RadioButton android:id="@+id/methodAeQuant"
+                    style="@style/Option" android:text="@string/method_ae_quant" />
+                <RadioButton android:id="@+id/methodProposed"
+                    style="@style/Option" android:text="@string/method_proposed"
+                    android:checked="true" />
+            </RadioGroup>
+
+            <!-- Cloud offload. The URL field is only read when the box is checked; otherwise
+                 the `server_url` intent extra is used, if present. -->
+            <LinearLayout
+                style="@style/OptionRow"
+                android:gravity="center_vertical"
+                android:layout_marginTop="4dp">
+
+                <CheckBox android:id="@+id/offloadCheck"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="@string/offload"
+                    android:textColor="@color/text_primary" android:textSize="12sp" />
+                <EditText android:id="@+id/offloadUrl"
+                    android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="2"
+                    android:text="@string/offload_url_default"
+                    android:hint="@string/offload_url_hint"
+                    android:inputType="textUri"
+                    android:importantForAutofill="no"
+                    android:textColor="@color/text_primary"
+                    android:textColorHint="@color/text_hint"
+                    android:textSize="12sp" />
+                <!-- Network regime the server applies delay for. -->
+                <Spinner android:id="@+id/offloadRegime"
+                    android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minHeight="40dp" />
+            </LinearLayout>
+
+            <!-- Fixed only. -->
+            <LinearLayout
+                android:id="@+id/cellGridWrap"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone"
+                android:layout_marginTop="4dp">
+
+                <TextView style="@style/SectionLabel" android:text="@string/label_fixed_cell" />
+
+                <!-- rowCount and columnCount are overwritten by buildCellGrid() to match the
+                     active Grid; the values here only shape the editor preview. -->
+                <GridLayout
+                    android:id="@+id/cellGrid"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:rowCount="3"
+                    android:columnCount="3"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <!-- Multiplies every virtually formed cell. Raw captures are written unboosted, so
+                 divide it out before comparing pixels across the virtual/physical boundary. -->
+            <TextView style="@style/SectionLabel" android:text="@string/label_digital_boost" />
+
+            <RadioGroup
+                android:id="@+id/boostGroup"
+                style="@style/OptionRow">
+
+                <RadioButton android:id="@+id/boost1x"
+                    style="@style/Option" android:text="@string/boost_1x" />
+                <RadioButton android:id="@+id/boost2x"
+                    style="@style/Option" android:text="@string/boost_2x"
+                    android:checked="true" />
+                <RadioButton android:id="@+id/boost4x"
+                    style="@style/Option" android:text="@string/boost_4x" />
+            </RadioGroup>
+
+            <!-- Operating cutoff for sum_conf and for Proposed's selection. The detector always
+                 floors at 0.01; this only decides what counts as a real detection. -->
+            <LinearLayout
+                style="@style/OptionRow"
+                android:gravity="center_vertical"
+                android:layout_marginTop="4dp">
+
+                <TextView style="@style/SectionLabel"
+                    android:text="@string/label_conf_threshold"
+                    android:layout_marginTop="0dp"
+                    android:paddingEnd="6dp" />
+
+                <Spinner android:id="@+id/confThreshSpinner"
+                    android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minHeight="40dp" />
+            </LinearLayout>
+
+            <!-- AE and AE_quant only. -->
+            <LinearLayout
+                android:id="@+id/aeSettings"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView style="@style/SectionLabel" android:text="@string/label_ae_strategy" />
+
+                <RadioGroup
+                    android:id="@+id/aeStrategyGroup"
+                    style="@style/OptionRow">
+
+                    <RadioButton android:id="@+id/aePhone"
+                        style="@style/Option" android:text="@string/ae_phone"
+                        android:checked="true" />
+                    <RadioButton android:id="@+id/aeCustom"
+                        style="@style/Option" android:text="@string/ae_custom" />
+                </RadioGroup>
+            </LinearLayout>
+
+            <!-- Proposed only. -->
+            <LinearLayout
+                android:id="@+id/proposedSettings"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="visible">
+
+                <!-- Every Nth step probes the full grid; the rest probe the gain column. -->
+                <TextView style="@style/SectionLabel" android:text="@string/label_period" />
+
+                <RadioGroup
+                    android:id="@+id/periodGroup"
+                    style="@style/OptionRow">
+
+                    <RadioButton android:id="@+id/period5"
+                        style="@style/Option" android:text="@string/period_5"
+                        android:checked="true" />
+                    <RadioButton android:id="@+id/period9"
+                        style="@style/Option" android:text="@string/period_9" />
+                    <RadioButton android:id="@+id/period12"
+                        style="@style/Option" android:text="@string/period_12" />
+                </RadioGroup>
+
+                <!-- Tie-break when no candidate has any detection. Entropy, LapVar, Tenen and
+                     Crete score image content; Safe skips scoring and picks the cell on the
+                     motion-safe shutter row whose brightness is closest to mid-gray. -->
+                <TextView style="@style/SectionLabel" android:text="@string/label_fallback" />
+
+                <RadioGroup
+                    android:id="@+id/fallbackGroup"
+                    style="@style/OptionRow">
+
+                    <RadioButton android:id="@+id/fbEntropy"
+                        style="@style/Option.Narrow" android:text="@string/fallback_entropy" />
+                    <RadioButton android:id="@+id/fbLaplacian"
+                        style="@style/Option.Narrow" android:text="@string/fallback_laplacian" />
+                    <RadioButton android:id="@+id/fbTenengrad"
+                        style="@style/Option.Narrow" android:text="@string/fallback_tenengrad" />
+                    <RadioButton android:id="@+id/fbCreteRoffet"
+                        style="@style/Option.Narrow" android:text="@string/fallback_crete" />
+                    <RadioButton android:id="@+id/fbSafeCell"
+                        style="@style/Option.Narrow" android:text="@string/fallback_safe"
+                        android:checked="true" />
+                </RadioGroup>
+            </LinearLayout>
+
+            <!-- Start runs whichever method is selected above; the second row holds the modes
+                 that take no parameters. -->
+            <LinearLayout
+                style="@style/OptionRow"
+                android:layout_marginTop="6dp">
+
+                <Button android:id="@+id/btnStart" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="3"
+                    android:text="@string/btn_start" android:textSize="13sp" />
+
+                <Button android:id="@+id/btnStop" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="@string/btn_stop" android:textSize="12sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                style="@style/OptionRow"
+                android:layout_marginTop="4dp">
+
+                <Button android:id="@+id/btnRotationStart"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/btn_rotation_start"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                style="@style/OptionRow"
+                android:layout_marginTop="4dp">
+
+                <Button android:id="@+id/btnVerify"
+                    style="@style/Option.Narrow" android:text="@string/btn_verify" />
+
+                <Button android:id="@+id/btnVerifyProbe"
+                    style="@style/Option.Narrow" android:text="@string/btn_verify_probe" />
+
+                <Button android:id="@+id/btnBench"
+                    style="@style/Option.Narrow" android:text="@string/btn_bench" />
+
+                <Button android:id="@+id/btnIsoDiag"
+                    style="@style/Option.Narrow" android:text="@string/btn_iso_diag" />
+            </LinearLayout>
+
+            <Button android:id="@+id/btnExp21"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/btn_exp21"
+                android:visibility="gone"
+                android:textSize="13sp" />
+
+            <Button android:id="@+id/btnExp22"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/btn_exp22"
+                android:visibility="gone"
+                android:textSize="13sp" />
+
+            <Button android:id="@+id/btnExp23"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/btn_exp23"
+                android:visibility="gone"
+                android:textSize="13sp" />
+
+            <Button android:id="@+id/btnExp3"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/btn_exp3"
+                android:visibility="gone"
+                android:textSize="13sp" />
+
+            <Button android:id="@+id/btnExp4"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/btn_exp4"
+                android:visibility="gone"
+                android:textSize="13sp" />
+
+            <Button android:id="@+id/btnExp51"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/btn_exp51"
+                android:visibility="gone"
+                android:textSize="13sp" />
+
+        </LinearLayout>
+    </ScrollView>
+
+</LinearLayout>
