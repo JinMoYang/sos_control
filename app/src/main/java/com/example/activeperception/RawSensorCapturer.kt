@@ -2,6 +2,7 @@ package com.example.activeperception
 
 import android.content.Context
 import android.graphics.ImageFormat
+import android.os.Build
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -190,10 +191,14 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     var streamFormat: Int = ImageFormat.RAW_SENSOR; private set
     val streamFormatName: String get() = formatName(streamFormat)
     /** Min frame duration of the ACTIVE RAW stream, from the stream configuration map;
-     *  falls back to the RayNeo-measured 33.329ms when the HAL reports none. Querying the
-     *  advertised value instead of pinning the constant lets the same code drive the S25's
-     *  60fps RAW16 stream and the RayNeo's 30fps RAW10 stream without device branches. */
+     *  falls back to the RayNeo-measured 33.329ms when the HAL reports none. */
     @Volatile var streamMinFrameDurationNs: Long = BASE_FRAME_DURATION_NS; private set
+    /** RayNeo pins SENSOR_FRAME_DURATION (validated 33.3ms cadence; frame-number to
+     *  wall-time conversion depends on it). The S25 HAL advertises a conservative 33.3ms
+     *  min for full-res RAW but delivers 16.7ms bursts when the key is left unset
+     *  (measured in sos_control) — pinning to the advertised value would halve the
+     *  stream rate, so non-RayNeo devices leave the key out. */
+    private val pinFrameDuration = Build.MANUFACTURER.equals("RayNeo", ignoreCase = true)
 
     private val manager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private lateinit var chars: CameraCharacteristics
@@ -954,8 +959,10 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             set(CaptureRequest.COLOR_CORRECTION_MODE, CameraMetadata.COLOR_CORRECTION_MODE_FAST)
             set(CaptureRequest.SENSOR_EXPOSURE_TIME, expected.exposureUs * 1_000L)
             set(CaptureRequest.SENSOR_SENSITIVITY, expected.iso)
-            set(CaptureRequest.SENSOR_FRAME_DURATION,
-                max(streamMinFrameDurationNs, expected.exposureUs * 1_000L + 1_000_000L))
+            if (pinFrameDuration) {
+                set(CaptureRequest.SENSOR_FRAME_DURATION,
+                    max(streamMinFrameDurationNs, expected.exposureUs * 1_000L + 1_000_000L))
+            }
             setTag(commandId)
             addTarget(reader!!.surface)
         }.build()
