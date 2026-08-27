@@ -206,18 +206,25 @@ class MeasurementController(
             put("virtual_window", if (colorPipeline == ColorPipeline.ORIGINAL_GAIN_SRGB)
                 "first_n_original_sos" else "centered_rayneo_legacy")
         })
-        // Mirrors the TfliteYoloDetector defaults the Activity constructs it with. Boxes in
-        // dets.jsonl are post-NMS, post-class-filter, post-conf_floor.
+        // Reads the loaded detector's actual configuration (device-profiled: COCO5 head on
+        // RayNeo, 80-class + vehicle filter on the S25). Boxes in dets.jsonl are post-NMS,
+        // post-class-filter, post-conf_floor.
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
         m.put("detector", JSONObject().apply {
-            put("model", "yolov8n_640_coco5_fp16")
+            put("model", tfl?.modelName ?: "unknown")
             put("img_size", 640)
             put("conf_floor", 0.01)
             put("iou_thresh", 0.45)
             put("max_det_per_frame", 100)
-            put("class_filter", "coco5_head")
-            put("allowed_classes", JSONArray(listOf(41, 40, 46, 5, 60)))
-            put("class_names", JSONArray(listOf("cup", "wine glass", "banana", "bus", "dining table")))
-            put("num_classes", 5)
+            if (tfl?.usesClassIdMap == true) {
+                put("class_filter", "coco5_head")
+                put("allowed_classes", JSONArray(listOf(41, 40, 46, 5, 60)))
+                put("class_names", JSONArray(listOf("cup", "wine glass", "banana", "bus", "dining table")))
+            } else {
+                put("class_filter", "allowed_set")
+                put("allowed_classes", JSONArray(tfl?.configuredAllowed?.sorted() ?: emptyList<Int>()))
+            }
+            put("num_classes", tfl?.configuredNumClasses ?: -1)
             put("select_conf_threshold", selectConf)
             put("backend_by_batch",
                 (detector as? com.example.activeperception.acquire.TfliteYoloDetector)
@@ -2958,8 +2965,8 @@ class MeasurementController(
                     else "shared RGB then native tensor")
                 .put("health_sampling", if (integratedOptimizations)
                     "2s low-priority background cache" else "cached")
-                .put("yolo_choice", "640 FP16 GPU COCO5 B9/B3; B9 faster than 3xB3")
-                .put("gpu_model", "COCO5 FP16 B3/B9")
+                .put("yolo_choice", "640 FP16 GPU ${optimizedDetector.modelName} B9/B3; B9 faster than 3xB3")
+                .put("gpu_model", "${optimizedDetector.modelName} FP16 B3/B9")
                 .put("display_overlay_image_save_in_critical_path", false)
                 .put("physical_exposure_adaptation", true))
         logger.csv("exp55", listOf(

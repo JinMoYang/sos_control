@@ -6,6 +6,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Rotation Start reuses the diagnostic app's ~200-400 Hz quaternion/gyro trigger. -->
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    <!-- Optional: with All files access granted (phone workflow), runs land in
+         Documents/sos where a file manager can see them. Without it the app still
+         records into its private directory — RayNeo never grants this. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
     <!-- TFLite GPU API 2.16 has an old library manifest that causes these legacy permissions
          to be implied. The RayNeo app neither needs nor requests them. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"

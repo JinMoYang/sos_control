@@ -36,10 +36,22 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class MeasurementLogger(context: Context, runName: String) {
 
-    /** App-private external storage needs no broad file-management permission and remains
-     *  accessible through adb for experiment export. */
-    val dir: File = File(context.getExternalFilesDir(null), "sos/$runName")
-        .apply { mkdirs() }
+    /** Public Documents/sos when the user has granted All files access, so runs show up in
+     *  a file manager without adb (the sos_control phone workflow); otherwise the
+     *  app-private external dir, which records identically and stays adb-accessible.
+     *  RayNeo never grants the special access, so its behavior is unchanged. */
+    val dir: File = run {
+        val canWritePublic = android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R ||
+            android.os.Environment.isExternalStorageManager()
+        val target = if (canWritePublic) {
+            @Suppress("DEPRECATION")
+            File(android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOCUMENTS), "sos/$runName")
+        } else {
+            File(context.getExternalFilesDir(null), "sos/$runName")
+        }
+        target.apply { mkdirs() }
+    }
     val imgDir: File = File(dir, "img").apply { mkdirs() }
     val rawDir: File = File(dir, "raw").apply { mkdirs() }
     private val writers = HashMap<String, BufferedWriter>()

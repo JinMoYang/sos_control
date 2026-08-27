@@ -593,21 +593,8 @@ class MeasurementActivity : AppCompatActivity() {
                 if (!opened) {
                     post("ROTATION PRELOAD · opening camera…")
                     raw = RawSensorCapturer(this); raw.open()
-                    post("ROTATION PRELOAD · loading optimized COCO5 GPU batches…")
-                    detector = TfliteYoloDetector(
-                        this,
-                        batchedAssets = listOf(
-                            "yolov8n_640_coco5_fp16.tflite" to 1,
-                            "yolov8n_640_b3_coco5_fp16.tflite" to 3,
-                            "yolov8n_640_b9_coco5_fp16.tflite" to 9
-                        ),
-                        numClasses = 5,
-                        classIdMap = TfliteYoloDetector.COCO5_CLASS_IDS,
-                        accelerator = TfliteYoloDetector.Accelerator.GPU,
-                        allowFallback = false,
-                        gpuBackend = TfliteYoloDetector.GpuBackend.AUTO,
-                        onLoadStatus = ::post
-                    )
+                    post("ROTATION PRELOAD · loading YOLO GPU batches…")
+                    detector = createProfiledDetector()
                     opened = true
                 }
                 if (session.cancelled) return@execute
@@ -954,6 +941,39 @@ class MeasurementActivity : AppCompatActivity() {
         }
     }
 
+    /** Device-profiled detector. RayNeo ships the validated COCO5 tabletop head (its
+     *  experiment domain); other devices (S25) run the original 80-class model with the
+     *  vehicle-class selection filter, matching the sos_control phone experiments. Both use
+     *  the same GPU probe mode (AUTO backend, no silent CPU fallback). */
+    private fun createProfiledDetector(): TfliteYoloDetector =
+        if (Build.MANUFACTURER.equals("RayNeo", ignoreCase = true)) TfliteYoloDetector(
+            this,
+            batchedAssets = listOf(
+                "yolov8n_640_coco5_fp16.tflite" to 1,
+                "yolov8n_640_b3_coco5_fp16.tflite" to 3,
+                "yolov8n_640_b9_coco5_fp16.tflite" to 9
+            ),
+            numClasses = 5,
+            classIdMap = TfliteYoloDetector.COCO5_CLASS_IDS,
+            accelerator = TfliteYoloDetector.Accelerator.GPU,
+            allowFallback = false,
+            gpuBackend = TfliteYoloDetector.GpuBackend.AUTO,
+            onLoadStatus = ::post
+        ) else TfliteYoloDetector(
+            this,
+            batchedAssets = listOf(
+                "yolov8n_640_fp16.tflite" to 1,
+                "yolov8n_640_b3_fp16.tflite" to 3,
+                "yolov8n_640_b9_fp16.tflite" to 9
+            ),
+            numClasses = 80,
+            allowed = setOf(2, 3, 5, 7),
+            accelerator = TfliteYoloDetector.Accelerator.GPU,
+            allowFallback = false,
+            gpuBackend = TfliteYoloDetector.GpuBackend.AUTO,
+            onLoadStatus = ::post
+        )
+
     /** Runs [block] on the persistent GPU worker with a fresh logger and controller, so each
      *  press gets its own run directory while the camera and three GPU interpreters are reused. */
     private fun start(modeTag: String, block: () -> Unit) {
@@ -980,21 +1000,8 @@ class MeasurementActivity : AppCompatActivity() {
                     raw = RawSensorCapturer(this); raw.open()
                     // Keep the paper's FP16 640px YOLOv8n and select the exact fixed batch for
                     // K=1/3/9. AUTO was validated on X3 Pro as OpenCL GPU delegate V2.
-                    post("loading optimized COCO5 YOLO GPU batches…")
-                    detector = TfliteYoloDetector(
-                        this,
-                        batchedAssets = listOf(
-                            "yolov8n_640_coco5_fp16.tflite" to 1,
-                            "yolov8n_640_b3_coco5_fp16.tflite" to 3,
-                            "yolov8n_640_b9_coco5_fp16.tflite" to 9
-                        ),
-                        numClasses = 5,
-                        classIdMap = TfliteYoloDetector.COCO5_CLASS_IDS,
-                        accelerator = TfliteYoloDetector.Accelerator.GPU,
-                        allowFallback = false,
-                        gpuBackend = TfliteYoloDetector.GpuBackend.AUTO,
-                        onLoadStatus = ::post
-                    )
+                    post("loading YOLO GPU batches…")
+                    detector = createProfiledDetector()
                     post("GPU ready ${detector.backendSummary} — capturing first frame…")
                     opened = true
                 }

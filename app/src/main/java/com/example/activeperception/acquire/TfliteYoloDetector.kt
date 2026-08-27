@@ -78,6 +78,13 @@ class TfliteYoloDetector(
 
     private val appContext = context.applicationContext
 
+    /** Which model/classes this instance loaded, for run manifests. */
+    val modelName: String = batchedAssets.minByOrNull { it.second }?.first
+        ?.removeSuffix(".tflite") ?: "unknown"
+    val configuredNumClasses: Int get() = numClasses
+    val configuredAllowed: Set<Int>? get() = allowed
+    val usesClassIdMap: Boolean get() = classIdMap != null
+
     /** One Interpreter pinned at a batch size, with its dedicated I/O buffers.
      *  The buffers are reused across calls, so [detectBatch] is NOT thread-safe. */
     private class BatchSlot(
