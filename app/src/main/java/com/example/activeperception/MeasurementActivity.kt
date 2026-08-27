@@ -203,6 +203,7 @@ class MeasurementActivity : AppCompatActivity() {
         boostGroup.setOnCheckedChangeListener { _, id ->
             grid.digitalBoost = boostFromCheckedId(id)
             buildCellGrid()
+            updateProfileSummary()
         }
 
         btnStart.setOnClickListener { startSelectedMethod() }
@@ -239,7 +240,11 @@ class MeasurementActivity : AppCompatActivity() {
         }
         btnStop.setOnClickListener { stopMeasurement() }
 
-        configureStaticTouchpadControls()
+        // The focus-first tap model exists for the glass touchpad only. On a phone it makes
+        // every control need TWO taps (focusableInTouchMode: first tap focuses, second
+        // clicks), so the phone profile keeps plain touch and hides the glass-only chrome.
+        if (rayNeoTouchpad) configureStaticTouchpadControls()
+        else configurePhoneProfileUi()
         // Start is the safest useful default: one tap launches the default Proposed mode.
         if (rayNeoTouchpad) btnStart.post { btnStart.requestFocus() }
 
@@ -447,7 +452,7 @@ class MeasurementActivity : AppCompatActivity() {
                     setPadding(0, 0, 0, 0)
                     setOnClickListener { setSelectedCell(cell) }
                 }
-                configureTouchpadControl(b)
+                if (rayNeoTouchpad) configureTouchpadControl(b)
                 val lp = GridLayout.LayoutParams().apply {
                     width = 0; height = GridLayout.LayoutParams.WRAP_CONTENT
                     columnSpec = GridLayout.spec(sj, 1f); rowSpec = GridLayout.spec(gi, 1f)
@@ -797,6 +802,22 @@ class MeasurementActivity : AppCompatActivity() {
 
     private fun configureStaticTouchpadControls() {
         touchpadControls().forEach(::configureTouchpadControl)
+    }
+
+    /** Phone profile: plain touch clicks, glass-only controls hidden, and an idle status
+     *  line naming the active device profile so a run's configuration is visible at a
+     *  glance before Start. */
+    private fun configurePhoneProfileUi() {
+        findViewById<View>(R.id.touchpadHelp).visibility = View.GONE
+        btnRotationStart.visibility = View.GONE
+        updateProfileSummary()
+    }
+
+    private fun updateProfileSummary() {
+        if (rayNeoTouchpad) return
+        val exps = grid.exposuresUs.joinToString("/") { (it / 1000).toString() }
+        status.text = "${Build.MODEL} · vehicle-80 {2,3,5,7} · ${exps}ms · " +
+            "ISO ${grid.gains.first()}-${grid.gains.last()} ×${grid.digitalBoost.toInt()}"
     }
 
     /** Reads the current hierarchy so rebuilt Fixed cells and hidden method settings stay sane. */
