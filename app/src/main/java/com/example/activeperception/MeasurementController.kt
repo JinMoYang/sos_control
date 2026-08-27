@@ -2969,6 +2969,18 @@ class MeasurementController(
                 .put("gpu_model", "${optimizedDetector.modelName} FP16 B3/B9")
                 .put("display_overlay_image_save_in_critical_path", false)
                 .put("physical_exposure_adaptation", true))
+        // Production runs must keep the sos_control ground-truth files alongside exp55:
+        // logger.row("frames", ...) inside logFrame is a silent no-op unless the csv is
+        // opened, and the IMU wiring / passStartMs / summary.json otherwise only happen
+        // through startPass/endPass, which this path does not use.
+        if (productionMode) {
+            passStartMs = System.currentTimeMillis()
+            logger.csv("frames", headers())
+            wireImuLog()
+            detectionTotalAboveThresh = 0
+            detectionTotalAtFloor = 0
+            totalFramesLogged = 0
+        }
         logger.csv("exp55", listOf(
             "measured", "cycle", "step", "phase", "k", "n_burst",
             "requested_exp_us", "applied_exp_us", "applied_iso", "metadata_match",
@@ -3239,6 +3251,8 @@ class MeasurementController(
                 if (rawSensor != null && raw.streamFormat != ImageFormat.RAW_SENSOR)
                     raw.reconfigureRawStream(rawSensor.format, rawSensor.width, rawSensor.height)
             }
+            // Unwires the IMU callbacks and writes summary.json for production runs.
+            if (productionMode) runCatching { endPass() }
             running = false; logger.flush()
         }
         onStatus(if (productionMode) "RayNeo SoS · run complete" else "EXP5.5 done")
