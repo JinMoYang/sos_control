@@ -3118,12 +3118,15 @@ class MeasurementController(
                 var candidateBitmaps: List<Bitmap>? = null
                 if (scores[chosen] == 0.0) {
                     tieBreak = fallback.tieBreakName()
-                    candidateBitmaps = cells.indices.map { source.selectedTensorBitmap(tensor, it) }
                     if (fallback == FallbackMetric.SAFE_CELL) {
+                        // SAFE_CELL needs only mean luma, which the tensor already holds —
+                        // reading the floats directly skips materializing K ARGB Bitmaps
+                        // (~10-15ms each, on the loop thread, EVERY zero-detection step).
+                        // The image-metric fallbacks below still need real Bitmaps.
                         var pick = -1; var bestDist = Double.MAX_VALUE
                         for (i in cells.indices) {
                             if (grid.indices(cells[i]).second != 0) continue
-                            val mean = meanLumaRatio(candidateBitmaps[i])
+                            val mean = meanLumaFromTensorLane(tensor.batch.input, i)
                             val distance = kotlin.math.abs(
                                 kotlin.math.ln((mean + 1e-6) / SAFE_TARGET_RATIO))
                             if (distance < bestDist) { bestDist = distance; pick = i }
@@ -3133,6 +3136,7 @@ class MeasurementController(
                         } ?: 0
                         chosen = pick
                     } else {
+                        candidateBitmaps = cells.indices.map { source.selectedTensorBitmap(tensor, it) }
                         val fallbackValues = fallbackScores(requireNotNull(candidateBitmaps), fallback)
                         chosen = fallbackValues.indices.maxByOrNull { fallbackValues[it] } ?: 0
                     }
@@ -3374,6 +3378,26 @@ class MeasurementController(
             i += step
         }
         return if (count == 0) 0.0 else (sum.toDouble() / count) / 255.0
+    }
+
+    /** [meanLumaRatio] computed straight from one 640x640x3 HWC float lane of the batch
+     *  tensor, so SAFE_CELL never materializes a Bitmap. Same sampling stride and BT.601
+     *  weights; differs from the Bitmap path only by its 8-bit quantization (<1/255 per
+     *  sample), far below the ~2x brightness gaps the log-distance pick discriminates. */
+    private fun meanLumaFromTensorLane(input: java.nio.ByteBuffer, lane: Int): Double {
+        val pixels = 640 * 640
+        val base = lane * pixels * 3 * 4
+        val step = (pixels / 100_000).coerceAtLeast(1)
+        var sum = 0.0; var count = 0
+        var p = 0
+        while (p < pixels) {
+            val o = base + p * 3 * 4
+            sum += input.getFloat(o) * 0.299 + input.getFloat(o + 4) * 0.587 +
+                input.getFloat(o + 8) * 0.114
+            count++
+            p += step
+        }
+        return if (count == 0) 0.0 else sum / count
     }
 
     /** Mean RAW value as a fraction of white, for Custom AE's brightness feedback. */
