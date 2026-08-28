@@ -3606,7 +3606,13 @@ class MeasurementController(
 
                 val formationStart = now()
                 val tensor = if (integratedOptimizations) {
-                    if (!productionMode && !fusedValidated && isProbe) {
+                    // The fused-vs-reference check must run in production too: it is the
+                    // licence for calling the fused path "the same formation, faster", and
+                    // gating it on !productionMode meant the S25 recorded experiment data
+                    // without the kernel ever being certified on that device (the LIMO
+                    // audit found exp6_validation.csv empty in every production run). One
+                    // double formation on the first probe step is the entire cost.
+                    if (!fusedValidated && isProbe) {
                         val reference = source.formExp21NativeTensor(
                             source.prepareExp21Rgb(packet.frames, cells))
                         val totalFloats = cells.size * 640 * 640 * 3
