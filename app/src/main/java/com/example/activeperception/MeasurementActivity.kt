@@ -901,6 +901,12 @@ class MeasurementActivity : AppCompatActivity() {
     private fun configurePhoneProfileUi() {
         findViewById<View>(R.id.touchpadHelp).visibility = View.GONE
         btnRotationStart.visibility = View.GONE
+        // Custom AE is the cost-comparable strategy (deterministic, fast pipeline); the
+        // HAL's own AE runs the legacy one-shot path and is a fidelity baseline only —
+        // defaulting to Custom keeps an absent-minded Start from recording the arm whose
+        // latency cannot sit in the cost table, and the label says why.
+        findViewById<android.widget.RadioButton>(R.id.aeCustom).isChecked = true
+        findViewById<android.widget.RadioButton>(R.id.aePhone).text = "Phone AE (legacy)"
         updateProfileSummary()
     }
 
