@@ -791,7 +791,7 @@ class MeasurementController(
               aeStrategy: AeStrategy,
               onStatus: (String) -> Unit,
               onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }) {
-        val customAe = if (aeStrategy == AeStrategy.CUSTOM_BRIGHTNESS) CustomAeBrightness() else null
+        val customAe = if (aeStrategy == AeStrategy.CUSTOM_BRIGHTNESS) customAeForDevice() else null
         startPass("ae_${aeStrategy.tag()}", isGtReference, methodParams = JSONObject()
             .put("ae_strategy", aeStrategy.tag())
             .apply { if (customAe != null) put("custom_ae", customAe.toJson()) })
@@ -868,7 +868,7 @@ class MeasurementController(
                    aeStrategy: AeStrategy,
                    onStatus: (String) -> Unit,
                    onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }) {
-        val customAe = if (aeStrategy == AeStrategy.CUSTOM_BRIGHTNESS) CustomAeBrightness() else null
+        val customAe = if (aeStrategy == AeStrategy.CUSTOM_BRIGHTNESS) customAeForDevice() else null
         startPass("ae_paired_${aeStrategy.tag()}", isGtReference, methodParams = JSONObject()
             .put("ae_strategy", aeStrategy.tag())
             .apply { if (customAe != null) put("custom_ae", customAe.toJson()) })
@@ -3894,6 +3894,13 @@ class MeasurementController(
     /** Closed-loop AE driving mean brightness toward [targetRatio]. ISO absorbs the correction
      *  first and exposure only grows once ISO clamps, which keeps motion blur down. Unlike
      *  phone AE it is fully determined by the brightness sequence, so runs are reproducible. */
+    /** Custom AE clamped to the device's real sensitivity range: a request past the range
+     *  is never metadata-approved, so the capture times out ("obtained 0/N ... ISO1600
+     *  failures=0"). The design cap of 1600 still applies where the HAL allows more. */
+    private fun customAeForDevice() = CustomAeBrightness(
+        isoMin = maxOf(100, raw.sensorIsoMin),
+        isoMax = minOf(1600, raw.sensorIsoMax))
+
     private class CustomAeBrightness(
         val targetRatio: Double = 0.40,    // bright but short of clipping
         val isoMin: Int = 100,

@@ -65,7 +65,14 @@ class SensorStateScheduler(
 
     fun matches(expected: SensorState, actual: SensorState): Boolean =
         abs(expected.exposureUs - actual.exposureUs) <= exposureToleranceUs &&
-            abs(expected.iso - actual.iso) <= isoTolerance
+            abs(expected.iso - actual.iso) <= isoToleranceFor(expected.iso)
+
+    /** HAL sensitivity rounding is proportional (S25 family: 100->99, 400->398, ~0.5-1%),
+     *  so a fixed slack that covers ISO 400 starves ISO 1600 and the state never approves.
+     *  Scale as 1% of the request, floored at the configured tolerance; exact matching
+     *  (tolerance 0) stays exact. */
+    private fun isoToleranceFor(requestedIso: Int): Int =
+        if (isoTolerance == 0) 0 else maxOf(isoTolerance, requestedIso / 100)
 
     @Synchronized fun pendingSnapshot(): List<Command> = pending.toList()
     @Synchronized fun historySnapshot(): List<Command> = history.toList()

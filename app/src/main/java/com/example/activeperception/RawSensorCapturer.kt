@@ -188,6 +188,10 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     val bitmapHeight: Int get() = if (sensorOrientation.mod(180) == 0) sensorBitmapHeight else sensorBitmapWidth
     var timestampSource: Int = 0; private set
     var sensorOrientation: Int = 0; private set
+    /** SENSOR_INFO_SENSITIVITY_RANGE, so AE-style modes can clamp requests to what the
+     *  HAL can actually apply (a request past the range never metadata-approves). */
+    var sensorIsoMin: Int = 100; private set
+    var sensorIsoMax: Int = 1600; private set
     var streamFormat: Int = ImageFormat.RAW_SENSOR; private set
     val streamFormatName: String get() = formatName(streamFormat)
     /** Min frame duration of the ACTIVE RAW stream, from the stream configuration map;
@@ -256,6 +260,9 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
             ?: CameraMetadata.SYNC_MAX_LATENCY_UNKNOWN
         timestampSource = chars.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ?: 0
         sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.let {
+            sensorIsoMin = it.lower; sensorIsoMax = it.upper
+        }
         cfaPattern = when (chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)) {
             CameraMetadata.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB -> "RGGB"
             CameraMetadata.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG -> "GRBG"
