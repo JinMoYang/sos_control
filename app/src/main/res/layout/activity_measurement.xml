@@ -282,14 +282,27 @@
                     style="@style/Option.Narrow" android:text="@string/btn_iso_diag" />
             </LinearLayout>
 
-            <!-- On-device Neural-AE training: builds samples from the runs recorded on this
-                 phone and writes nae_hist_scalar_3x3.bin into the app files dir. -->
-            <Button android:id="@+id/btnTrainNae"
+            <!-- On-device Neural-AE: Collect appends one pass of samples to the pool
+                 (one press per lighting/scene); Train fits the whole pool once and
+                 writes nae_hist_scalar_3x3.bin into the app files dir. -->
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="Train NAE (recorded runs)"
-                android:textSize="13sp" />
+                android:orientation="horizontal">
+                <Button android:id="@+id/btnNaeCollect"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="Collect NAE"
+                    android:textSize="13sp" />
+                <Button android:id="@+id/btnNaeTrain"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="Train NAE"
+                    android:textSize="13sp" />
+            </LinearLayout>
 
             <Button android:id="@+id/btnExp21"
                 android:layout_width="match_parent"

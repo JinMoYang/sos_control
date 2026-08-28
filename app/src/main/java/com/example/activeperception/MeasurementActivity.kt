@@ -264,7 +264,8 @@ class MeasurementActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnExp51).setOnClickListener {
             start("exp5_1") { mc!!.runExp51CaptureGuardComparison(::post) }
         }
-        findViewById<Button>(R.id.btnTrainNae).setOnClickListener { trainNaeFromRecordings() }
+        findViewById<Button>(R.id.btnNaeCollect).setOnClickListener { collectNaeData() }
+        findViewById<Button>(R.id.btnNaeTrain).setOnClickListener { trainNaePool() }
         btnStop.setOnClickListener { stopMeasurement() }
 
         // The focus-first tap model exists for the glass touchpad only. On a phone it makes
@@ -504,35 +505,59 @@ class MeasurementActivity : AppCompatActivity() {
             assets.open("nae_hist_scalar_3x3.bin").use { it.readBytes() }
         }.getOrNull()
 
-    /** Neural-AE data collection followed by training, both on the phone. Collection is a
-     *  measurement pass like any other (Stop ends it early and still trains on whatever
-     *  reached the pool), so it goes through [start]; training then runs on the same
-     *  worker and writes the weights where [loadNaeWeights] looks first.
+    private fun naeDatasetFile() = java.io.File(getExternalFilesDir(null), "nae_dataset.bin")
+
+    /** Neural-AE data collection only: one press appends up to [NAE_TARGET_SAMPLES] to the
+     *  pool. Collection is a measurement pass like any other (Stop ends it early and keeps
+     *  whatever reached the pool), so it goes through [start].
      *
-     *  Budget: [NAE_TARGET_SAMPLES] samples at [NAE_CELLS_PER_STEP] per step is ~200
-     *  full-grid probe steps, and a probe step measured ~0.5 s on the S25 — under two
-     *  minutes of pointing the phone at traffic. The frame cap bounds a scene that never
-     *  detects anything; samples accumulate across presses, so several scenes can be
-     *  collected before the pool is large enough. */
-    private fun trainNaeFromRecordings() {
-        val dataset = java.io.File(getExternalFilesDir(null), "nae_dataset.bin")
-        val already = NaeDataset.count(dataset)
+     *  Training is a separate button: a multi-condition protocol (one collection pass per
+     *  lighting) trains once on the pooled set at the end, instead of a throwaway
+     *  retraining after every pass.
+     *
+     *  Budget: [NAE_TARGET_SAMPLES] samples at [NAE_CELLS_PER_STEP] per step is ~100
+     *  full-grid probe steps, and a probe step measured ~0.5 s on the S25 — about a
+     *  minute of pointing the phone at traffic. The frame cap bounds a scene that never
+     *  detects anything. */
+    private fun collectNaeData() {
+        val already = NaeDataset.count(naeDatasetFile())
         start("nae_collect") {
             post("NAE collect: pool has $already samples — collecting…")
-            val added = mc!!.runNaeCollect(dataset, NAE_TARGET_SAMPLES, NAE_MAX_FRAMES,
+            val added = mc!!.runNaeCollect(naeDatasetFile(), NAE_TARGET_SAMPLES, NAE_MAX_FRAMES,
                 NAE_CELLS_PER_STEP, ::post, ::onFrameWithOffload)
-            val samples = NaeDataset.load(dataset)
-            if (samples.size < NAE_MIN_TRAIN) {
-                post("NAE: +$added → ${samples.size} samples, need $NAE_MIN_TRAIN — " +
-                    "press again on a scene with vehicles")
-                return@start
+            val total = NaeDataset.count(naeDatasetFile())
+            post(if (total >= NAE_MIN_TRAIN)
+                "NAE collect: +$added → $total samples — collect the next condition, or Train"
+            else "NAE collect: +$added → $total samples, need $NAE_MIN_TRAIN — " +
+                "press again on a scene with vehicles")
+        }
+    }
+
+    /** Trains on the whole pool and writes the weights where [loadNaeWeights] looks first.
+     *  No camera involved; the GPU worker just serializes it against runs, and [runActive]
+     *  keeps Start/Collect refusals honest while an epoch loop is busy. */
+    private fun trainNaePool() {
+        if (runActive) { post("busy — stop first"); return }
+        val n = NaeDataset.count(naeDatasetFile())
+        if (n < NAE_MIN_TRAIN) {
+            post("NAE train: pool has $n samples, need $NAE_MIN_TRAIN — Collect first")
+            return
+        }
+        runActive = true
+        inferenceExecutor.execute {
+            try {
+                post("NAE train: loading $n samples…")
+                val samples = NaeDataset.load(naeDatasetFile())
+                val bin = com.example.activeperception.acquire.NaeTrainer().train(samples) { ep, tr, va ->
+                    if (ep % 5 == 0) post("NAE train: epoch $ep loss ${"%.4f".format(tr)} val ${"%.4f".format(va)}")
+                }
+                java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").writeBytes(bin)
+                post("NAE ready: trained on $n samples — select NeuralAE and Start")
+            } catch (e: Exception) {
+                post("NAE train failed: ${e.message}")
+            } finally {
+                runActive = false
             }
-            post("NAE train: ${samples.size} samples (+$added new)…")
-            val bin = com.example.activeperception.acquire.NaeTrainer().train(samples) { ep, tr, va ->
-                if (ep % 5 == 0) post("NAE train: epoch $ep loss ${"%.4f".format(tr)} val ${"%.4f".format(va)}")
-            }
-            java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").writeBytes(bin)
-            post("NAE ready: trained on ${samples.size} samples — select NeuralAE and Start")
         }
     }
 
