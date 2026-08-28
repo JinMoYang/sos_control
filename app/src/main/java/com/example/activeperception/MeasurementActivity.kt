@@ -553,8 +553,8 @@ class MeasurementActivity : AppCompatActivity() {
             }
             R.id.methodProposed -> {
                 val period = when (periodGroup.checkedRadioButtonId) {
-                    R.id.period9 -> 9
-                    R.id.period12 -> 12
+                    R.id.period10 -> 10
+                    R.id.period20 -> 20
                     else -> 5
                 }
                 val fallback = when (fallbackGroup.checkedRadioButtonId) {
@@ -632,8 +632,8 @@ class MeasurementActivity : AppCompatActivity() {
             }
             R.id.methodProposed -> {
                 val period = when (periodGroup.checkedRadioButtonId) {
-                    R.id.period9 -> 9
-                    R.id.period12 -> 12
+                    R.id.period10 -> 10
+                    R.id.period20 -> 20
                     else -> 5
                 }
                 val fallback = when (fallbackGroup.checkedRadioButtonId) {

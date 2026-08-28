@@ -210,10 +210,10 @@
                     <RadioButton android:id="@+id/period5"
                         style="@style/Option" android:text="@string/period_5"
                         android:checked="true" />
-                    <RadioButton android:id="@+id/period9"
-                        style="@style/Option" android:text="@string/period_9" />
-                    <RadioButton android:id="@+id/period12"
-                        style="@style/Option" android:text="@string/period_12" />
+                    <RadioButton android:id="@+id/period10"
+                        style="@style/Option" android:text="@string/period_10" />
+                    <RadioButton android:id="@+id/period20"
+                        style="@style/Option" android:text="@string/period_20" />
                 </RadioGroup>
 
                 <!-- Tie-break when no candidate has any detection. Entropy, LapVar, Tenen and
