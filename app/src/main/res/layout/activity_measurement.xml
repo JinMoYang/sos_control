@@ -101,8 +101,6 @@
                     android:checked="true" />
                 <RadioButton android:id="@+id/methodPhysSweep"
                     style="@style/Option.Narrow" android:text="PhysSweep" />
-                <RadioButton android:id="@+id/methodShinSel"
-                    style="@style/Option.Narrow" android:text="ShinSel" />
                 <RadioButton android:id="@+id/methodShinNM"
                     style="@style/Option.Narrow" android:text="ShinNM" />
                 <RadioButton android:id="@+id/methodNeuralAe"

@@ -541,10 +541,6 @@ class MeasurementActivity : AppCompatActivity() {
                 }
                 return
             }
-            R.id.methodShinSel -> {
-                start("shin_sel") { mc!!.runShinSelect(300, ::post, ::onFrameWithOffload) }
-                return
-            }
             R.id.methodShinNM -> {
                 start("shin_nm") { mc!!.runShinNM("restart_int", 300, ::post, ::onFrameWithOffload) }
                 return
