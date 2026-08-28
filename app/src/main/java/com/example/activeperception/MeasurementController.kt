@@ -3737,12 +3737,20 @@ class MeasurementController(
                     val previewDets = source.detectionsForTensorPreview(selected, tensor, chosen)
                     val imagePath = logger.saveJpegAsync(
                         "${frameName(globalStep)}_cell${anchor}", bitmap)
+                    // dets.jsonl gets the chosen cell's FULL detections (0.01 tail included,
+                    // source coordinate space) like every other mode — `previewDets` is
+                    // filtered at selectConf and remapped to tensor space for the overlay
+                    // only. The LIMO passes shipped previewDets here, silently truncating
+                    // the proposed runs' floor tail at the operating threshold (provable:
+                    // min conf 0.0517 with a 0-row sub-0.05 tail, ~1e-24 odds) and putting
+                    // dets.jsonl in a different box space than candidate_dets.jsonl;
+                    // candidate_dets' chosen rows are the repair for those runs.
                     logFrame(globalStep, "proposed_final", anchor,
                         grid.gains[grid.indices(anchor).first], grid.exposuresUs[chosenSj],
                         cells.size, isProbe, formationMs,
                         active.lastPreprocessMs + active.lastRunMs + active.lastDecodeMs,
                         (detectionReadyNs - stepStart) / 1e6,
-                        previewDets, imagePath, tieBreak)
+                        detections[chosen], imagePath, tieBreak)
                     onFrame(bitmap, previewDets, effIso(grid.gains[grid.indices(anchor).first]),
                         grid.exposuresUs[chosenSj])
                 }
