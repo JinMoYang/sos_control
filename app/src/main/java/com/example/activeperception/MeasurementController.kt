@@ -250,6 +250,76 @@ class MeasurementController(
     private fun sumConf(dets: List<Detection>, sel: Float = selectConf) =
         Signal.sumConfV3(dets, sel)
 
+    // ---------- shared optimized pipeline ----------
+
+    /**
+     * The capture/formation/inference path validated for the production controller, made
+     * available to every other mode.
+     *
+     * Until 2026-08-28 only [runExp55FinalAdaptiveP5] used it; the baselines and the
+     * Fixed/AE modes still ran the legacy route (one-shot `capture` with its per-call
+     * listener arm and drain, `bitmapFromRaw`, Bitmap-preprocess `detectBatch`). On the
+     * LIMO passes that cost 200-500 ms of capture round-trip per step, so per-step latency
+     * across policies compared PIPELINE GENERATIONS rather than methods — the baselines
+     * looked 3-6x slower for reasons unrelated to their exposure policy. Anything whose
+     * cost is reported next to the controller's must run through here.
+     *
+     * Physical-visit policies (Fixed, AE, PhysSweep, ShinNM, NeuralAe) capture AT their
+     * cell and form the single identity cell, exactly as [bitmapFromRaw] did; virtual-probe
+     * policies (ShinSelect, NaeCollect) capture one base burst and form the whole grid.
+     */
+    private inner class FastPipeline(
+        val tfl: com.example.activeperception.acquire.TfliteYoloDetector
+    ) {
+        val source = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        /** The cell whose formation is a plain demosaic of a capture already taken at the
+         *  wanted setting (gain ratio 1 x digitalBoost, burst 1) — [bitmapFromRaw]'s cell. */
+        val identityCell = intArrayOf(grid.cell(0, 0))
+
+        fun open(onStatus: (String) -> Unit) {
+            raw.configureDecodeThreads(4)
+            raw.startFastCapture()
+            onStatus("warming FP16 GPU B=1/3/9…")
+            tfl.warmUpAllBatches()
+        }
+
+        fun close() {
+            runCatching { raw.stopFastCapture() }
+            runCatching { source.shutdown() }
+        }
+
+        fun capture(exposureUs: Int, iso: Int, nBurst: Int = 1): List<RawFrame> =
+            raw.captureFast(exposureUs, iso, nBurst)
+
+        /** Fused RAW->tensor formation plus one batched inference over [cells]. */
+        fun formAndDetect(frames: List<RawFrame>, cells: IntArray):
+            Pair<Exp21TensorResult, List<List<Detection>>> {
+            val tensor = source.formFusedNativeTensor(frames, cells)
+            return tensor to tfl.detectTensorBatchOptimized(tensor.batch)
+        }
+
+        /** GPU run + decode of the last [formAndDetect]; preprocess is 0 on this path
+         *  because formation wrote the tensor directly. */
+        val inferMs: Double get() = tfl.lastRunMs + tfl.lastDecodeMs
+
+        fun bitmap(tensor: Exp21TensorResult, lane: Int): Bitmap =
+            source.selectedTensorBitmap(tensor, lane)
+
+        /** Boxes remapped into the 640 tensor space the preview bitmap lives in. */
+        fun previewDets(dets: List<Detection>, tensor: Exp21TensorResult, lane: Int) =
+            source.detectionsForTensorPreview(dets, tensor, lane)
+    }
+
+    /** Runs [body] with the optimized pipeline open, tearing it down on every exit path. */
+    private fun <T> withFastPipeline(onStatus: (String) -> Unit, body: (FastPipeline) -> T): T {
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+            ?: error("optimized pipeline requires TfliteYoloDetector")
+        val p = FastPipeline(tfl)
+        p.open(onStatus)
+        try { return body(p) } finally { p.close() }
+    }
+
     private fun detJson(d: Detection): JSONObject {
         val xy = JSONArray()
         for (v in d.xyxy) xy.put(v.toDouble())
@@ -367,21 +437,27 @@ class MeasurementController(
         val cell = grid.cell(gainIdx, shutterIdx)
         startPass("fixed_g${gainVal}_e${expUs}", isGtReference, methodParams = JSONObject()
             .put("gain_idx", gainIdx).put("shutter_idx", shutterIdx).put("cell", cell))
-        var f = 0
-        while (running && f < maxFrames) {
-            val t0 = now()
-            val frames = raw.capture(expUs, gainVal, 1)
-            if (frames.isEmpty()) break
-            val tf = now()
-            val bmp = bitmapFromRaw(frames[0])
-            val formMs = ms(tf)
-            val ti = now(); val dets = detector.detectBatch(listOf(bmp))[0]; val infMs = ms(ti)
-            val totalMs = ms(t0)
-            val path = logger.saveJpegAsync("${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
-            logFrame(f, "fixed", cell, gainVal, expUs, 1, false, formMs, infMs, totalMs, dets, path)
-            onFrame(bmp, dets, effIso(gainVal), expUs)
-            onStatus("Fixed f=$f g=${effIso(gainVal)} exp=${expUs}us ndet=${dets.size} ${"%.0f".format(totalMs)}ms")
-            f++
+        withFastPipeline(onStatus) { pipe ->
+            var f = 0
+            while (running && f < maxFrames) {
+                val t0 = now()
+                val frames = pipe.capture(expUs, gainVal, 1)
+                if (frames.isEmpty()) break
+                val tf = now()
+                val (tensor, detsAll) = pipe.formAndDetect(frames, pipe.identityCell)
+                val formMs = ms(tf)
+                val dets = detsAll[0]
+                val totalMs = ms(t0)
+                val bmp = pipe.bitmap(tensor, 0)
+                val path = logger.saveJpegAsync(
+                    "${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
+                logFrame(f, "fixed", cell, gainVal, expUs, 1, false, formMs,
+                    pipe.inferMs, totalMs, dets, path)
+                onFrame(bmp, pipe.previewDets(dets, tensor, 0), effIso(gainVal), expUs)
+                onStatus("Fixed f=$f g=${effIso(gainVal)} exp=${expUs}us ndet=${dets.size} " +
+                    "${"%.0f".format(totalMs)}ms")
+                f++
+            }
         }
         endPass()
     }
@@ -408,47 +484,52 @@ class MeasurementController(
             .put("col_shutter_rule", "previous_winner_row (sim uses per-frame AE metering)"))
         logger.csv("candidates", listOf("frame", "cell", "gain", "exposure_us",
             "sum_conf", "chosen", "tie_break"))
-        var sweepSh = 0
-        var i = 0; var h = 0; var best = -1
-        val obs = ArrayList<Pair<Double, Int>>()
-        var f = 0
-        while (running && f < maxFrames) {
-            val cells: List<Int> = if (full) (0 until grid.nGain * grid.nShutter).toList()
-                else (0 until grid.nGain).map { grid.cell(it, sweepSh) }
-            val sweeping = i < cells.size
-            val cell: Int
-            if (sweeping) {
-                cell = cells[i]; i++
-            } else {
-                if (h == 0 && best < 0) {
-                    best = obs.maxByOrNull { it.first }?.second ?: cells[0]
-                    sweepSh = grid.indices(best).second
+        withFastPipeline(onStatus) { pipe ->
+            var sweepSh = 0
+            var i = 0; var h = 0; var best = -1
+            val obs = ArrayList<Pair<Double, Int>>()
+            var f = 0
+            while (running && f < maxFrames) {
+                val cells: List<Int> = if (full) (0 until grid.nGain * grid.nShutter).toList()
+                    else (0 until grid.nGain).map { grid.cell(it, sweepSh) }
+                val sweeping = i < cells.size
+                val cell: Int
+                if (sweeping) {
+                    cell = cells[i]; i++
+                } else {
+                    if (h == 0 && best < 0) {
+                        best = obs.maxByOrNull { it.first }?.second ?: cells[0]
+                        sweepSh = grid.indices(best).second
+                    }
+                    cell = best; h++
                 }
-                cell = best; h++
+                val (gi, sj) = grid.indices(cell)
+                val gainVal = grid.gains[gi]; val expUs = grid.exposuresUs[sj]
+                val t0 = now()
+                val frames = pipe.capture(expUs, gainVal, 1)
+                if (frames.isEmpty()) break
+                val tf = now()
+                val (tensor, detsAll) = pipe.formAndDetect(frames, pipe.identityCell)
+                val formMs = ms(tf)
+                val dets = detsAll[0]
+                val totalMs = ms(t0)
+                val score = sumConf(dets)
+                if (sweeping) obs.add(score to cell)
+                logger.row("candidates", listOf(f, cell, effIso(gainVal), expUs,
+                    "%.5f".format(score), if (!sweeping) 1 else 0,
+                    if (sweeping) "sweep" else "hold"))
+                val bmp = pipe.bitmap(tensor, 0)
+                val path = logger.saveJpegAsync(
+                    "${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
+                logFrame(f, "physsweep", cell, gainVal, expUs, 1, false, formMs,
+                    pipe.inferMs, totalMs, dets, path,
+                    tieBreak = if (sweeping) "sweep" else "hold")
+                onFrame(bmp, pipe.previewDets(dets, tensor, 0), effIso(gainVal), expUs)
+                onStatus("PhysSweep f=$f ${if (sweeping) "sweep" else "hold"} cell=$cell " +
+                    "score=${"%.2f".format(score)} ${"%.0f".format(totalMs)}ms")
+                if (!sweeping && h >= hold) { i = 0; h = 0; best = -1; obs.clear() }
+                f++
             }
-            val (gi, sj) = grid.indices(cell)
-            val gainVal = grid.gains[gi]; val expUs = grid.exposuresUs[sj]
-            val t0 = now()
-            val frames = raw.capture(expUs, gainVal, 1)
-            if (frames.isEmpty()) break
-            val tf = now()
-            val bmp = bitmapFromRaw(frames[0])
-            val formMs = ms(tf)
-            val ti = now(); val dets = detector.detectBatch(listOf(bmp))[0]; val infMs = ms(ti)
-            val totalMs = ms(t0)
-            val score = sumConf(dets)
-            if (sweeping) obs.add(score to cell)
-            logger.row("candidates", listOf(f, cell, effIso(gainVal), expUs,
-                "%.5f".format(score), if (!sweeping) 1 else 0,
-                if (sweeping) "sweep" else "hold"))
-            val path = logger.saveJpegAsync("${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
-            logFrame(f, "physsweep", cell, gainVal, expUs, 1, false, formMs, infMs, totalMs, dets, path,
-                tieBreak = if (sweeping) "sweep" else "hold")
-            onFrame(bmp, dets, effIso(gainVal), expUs)
-            onStatus("PhysSweep f=$f ${if (sweeping) "sweep" else "hold"} cell=$cell " +
-                "score=${"%.2f".format(score)} ${"%.0f".format(totalMs)}ms")
-            if (!sweeping && h >= hold) { i = 0; h = 0; best = -1; obs.clear() }
-            f++
         }
         endPass()
     }
@@ -467,43 +548,51 @@ class MeasurementController(
             .put("probe", "full_grid_virtual"))
         logger.csv("candidates", listOf("frame", "cell", "gain", "exposure_us",
             "metric", "chosen", "tie_break"))
-        val source = ParallelRawCandidateSource(grid, raw,
-            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         val allCells = IntArray(grid.nGain * grid.nShutter) { it }
-        var f = 0
-        while (running && f < maxFrames) {
-            val t0 = now()
-            val frames = raw.capture(grid.fastestExposureUs, grid.baseGain, grid.maxBurst)
-            if (frames.isEmpty()) break
-            val tf = now()
-            val bitmaps = source.formAllCells(frames, allCells)
-            val formMs = ms(tf)
-            val scores = DoubleArray(bitmaps.size) { k ->
-                val bmp = bitmaps[k]
-                val px = IntArray(bmp.width * bmp.height)
-                bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-                ShinMetric.score(ShinMetric.lumFromArgb(px, bmp.width, bmp.height),
-                    bmp.width, bmp.height)
+        withFastPipeline(onStatus) { pipe ->
+            var f = 0
+            while (running && f < maxFrames) {
+                val t0 = now()
+                val frames = pipe.capture(grid.fastestExposureUs, grid.baseGain, grid.maxBurst)
+                if (frames.isEmpty()) break
+                val tf = now()
+                // The metric needs pixels, and on this path pixels live in the batch tensor,
+                // so f(I) is read back per lane rather than from a formed Bitmap. Detection
+                // runs on the whole grid in the same launch the formation fed — the chosen
+                // lane's detections are then free, and every lane's are logged.
+                val (tensor, detsAll) = pipe.formAndDetect(frames, allCells)
+                val formMs = ms(tf)
+                val scores = DoubleArray(allCells.size) { k ->
+                    val bmp = pipe.bitmap(tensor, k)
+                    val px = IntArray(bmp.width * bmp.height)
+                    bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+                    val s = ShinMetric.score(ShinMetric.lumFromArgb(px, bmp.width, bmp.height),
+                        bmp.width, bmp.height)
+                    bmp.recycle(); s
+                }
+                var chosen = 0
+                for (k in scores.indices) if (scores[k] > scores[chosen]) chosen = k
+                val dets = detsAll[chosen]
+                val totalMs = ms(t0)
+                for (k in allCells.indices) {
+                    val (gi, sj) = grid.indices(allCells[k])
+                    logger.row("candidates", listOf(f, allCells[k], effIso(grid.gains[gi]),
+                        grid.exposuresUs[sj], "%.6f".format(scores[k]),
+                        if (k == chosen) 1 else 0, "shin_metric"))
+                }
+                val (gi, sj) = grid.indices(allCells[chosen])
+                val gainVal = grid.gains[gi]; val expUs = grid.exposuresUs[sj]
+                val bmp = pipe.bitmap(tensor, chosen)
+                val path = logger.saveJpegAsync(
+                    "${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
+                logFrame(f, "shin_sel", allCells[chosen], gainVal, expUs,
+                    allCells.size, true, formMs, pipe.inferMs, totalMs, dets, path,
+                    tieBreak = "shin_metric")
+                onFrame(bmp, pipe.previewDets(dets, tensor, chosen), effIso(gainVal), expUs)
+                onStatus("ShinSel f=$f cell=${allCells[chosen]} " +
+                    "f(I)=${"%.3f".format(scores[chosen])} ${"%.0f".format(totalMs)}ms")
+                f++
             }
-            var chosen = 0
-            for (k in scores.indices) if (scores[k] > scores[chosen]) chosen = k
-            val ti = now(); val dets = detector.detectBatch(listOf(bitmaps[chosen]))[0]; val infMs = ms(ti)
-            val totalMs = ms(t0)
-            for (k in allCells.indices) {
-                val (gi, sj) = grid.indices(allCells[k])
-                logger.row("candidates", listOf(f, allCells[k], effIso(grid.gains[gi]),
-                    grid.exposuresUs[sj], "%.6f".format(scores[k]),
-                    if (k == chosen) 1 else 0, "shin_metric"))
-            }
-            val (gi, sj) = grid.indices(allCells[chosen])
-            val gainVal = grid.gains[gi]; val expUs = grid.exposuresUs[sj]
-            val path = logger.saveJpegAsync("${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bitmaps[chosen])
-            logFrame(f, "shin_sel", allCells[chosen], gainVal, expUs,
-                allCells.size, true, formMs, infMs, totalMs, dets, path, tieBreak = "shin_metric")
-            onFrame(bitmaps[chosen], dets, effIso(gainVal), expUs)
-            onStatus("ShinSel f=$f cell=${allCells[chosen]} f(I)=${"%.3f".format(scores[chosen])} " +
-                "${"%.0f".format(totalMs)}ms")
-            f++
         }
         endPass()
     }
@@ -524,60 +613,66 @@ class MeasurementController(
             .put("start_rule", "proposed_cold_start_cell (sim: AE metering cell)"))
         logger.csv("candidates", listOf("frame", "cell", "gain", "exposure_us",
             "metric", "chosen", "tie_break"))
-        var nm: NelderMead? = null
-        var holdU: DoubleArray? = null
-        var holdI = -1.0
-        var nRestart = 0
-        val u0 = doubleArrayOf((grid.nGain - 1).toDouble(), 0.0)
-        var f = 0
-        while (running && f < maxFrames) {
-            val t0 = now()
-            val machine = nm
-            val proposal: DoubleArray
-            val phase: String
-            if (machine == null) { proposal = (holdU ?: u0).copyOf(); phase = "init" }
-            else {
-                val p = machine.propose()
-                if (p == null) { proposal = machine.best(); phase = "hold" }
-                else { proposal = p; phase = "search" }
-            }
-            val cell = NelderMead.snapToGrid(proposal, grid.nGain, grid.nShutter)
-            val (gi, sj) = grid.indices(cell)
-            val gainVal = grid.gains[gi]; val expUs = grid.exposuresUs[sj]
-            val frames = raw.capture(expUs, gainVal, 1)
-            if (frames.isEmpty()) break
-            val tf = now(); val bmp = bitmapFromRaw(frames[0]); val formMs = ms(tf)
-            val px = IntArray(bmp.width * bmp.height)
-            bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-            val lum = ShinMetric.lumFromArgb(px, bmp.width, bmp.height)
-            val fI = ShinMetric.score(lum, bmp.width, bmp.height)
-            val meanI = ShinMetric.meanIntensity(lum)
-            when (phase) {
-                // The constructor's first simplex vertex IS the (clipped) start point, so
-                // this frame's capture doubles as its evaluation — one capture per eval,
-                // matching the sim's cache-free reading of Alg. 1.
-                "init" -> nm = NelderMead(proposal, meanI, uMax).also { it.observe(-fI) }
-                "search" -> machine!!.observe(-fI)
-                "hold" -> {
-                    holdU = proposal
-                    if (holdI < 0) holdI = meanI
-                    if (mode == "always" ||
-                        (mode == "restart_int" && kotlin.math.abs(meanI - holdI) > 0.15 * 255)) {
-                        nm = null; holdI = -1.0; nRestart++
+        withFastPipeline(onStatus) { pipe ->
+            var nm: NelderMead? = null
+            var holdU: DoubleArray? = null
+            var holdI = -1.0
+            var nRestart = 0
+            val u0 = doubleArrayOf((grid.nGain - 1).toDouble(), 0.0)
+            var f = 0
+            while (running && f < maxFrames) {
+                val t0 = now()
+                val machine = nm
+                val proposal: DoubleArray
+                val phase: String
+                if (machine == null) { proposal = (holdU ?: u0).copyOf(); phase = "init" }
+                else {
+                    val p = machine.propose()
+                    if (p == null) { proposal = machine.best(); phase = "hold" }
+                    else { proposal = p; phase = "search" }
+                }
+                val cell = NelderMead.snapToGrid(proposal, grid.nGain, grid.nShutter)
+                val (gi, sj) = grid.indices(cell)
+                val gainVal = grid.gains[gi]; val expUs = grid.exposuresUs[sj]
+                val frames = pipe.capture(expUs, gainVal, 1)
+                if (frames.isEmpty()) break
+                val tf = now()
+                val (tensor, detsAll) = pipe.formAndDetect(frames, pipe.identityCell)
+                val formMs = ms(tf)
+                val dets = detsAll[0]
+                val bmp = pipe.bitmap(tensor, 0)
+                val px = IntArray(bmp.width * bmp.height)
+                bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+                val lum = ShinMetric.lumFromArgb(px, bmp.width, bmp.height)
+                val fI = ShinMetric.score(lum, bmp.width, bmp.height)
+                val meanI = ShinMetric.meanIntensity(lum)
+                when (phase) {
+                    // The constructor's first simplex vertex IS the (clipped) start point, so
+                    // this frame's capture doubles as its evaluation — one capture per eval,
+                    // matching the sim's cache-free reading of Alg. 1.
+                    "init" -> nm = NelderMead(proposal, meanI, uMax).also { it.observe(-fI) }
+                    "search" -> machine!!.observe(-fI)
+                    "hold" -> {
+                        holdU = proposal
+                        if (holdI < 0) holdI = meanI
+                        if (mode == "always" ||
+                            (mode == "restart_int" && kotlin.math.abs(meanI - holdI) > 0.15 * 255)) {
+                            nm = null; holdI = -1.0; nRestart++
+                        }
                     }
                 }
+                val totalMs = ms(t0)
+                logger.row("candidates", listOf(f, cell, effIso(gainVal), expUs,
+                    "%.6f".format(fI), 1, phase))
+                val path = logger.saveJpegAsync(
+                    "${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
+                logFrame(f, "shin_nm_$mode", cell, gainVal, expUs, 1, false, formMs,
+                    pipe.inferMs, totalMs, dets, path, tieBreak = phase)
+                onFrame(bmp, pipe.previewDets(dets, tensor, 0), effIso(gainVal), expUs)
+                onStatus("ShinNM[$mode] f=$f $phase cell=$cell f(I)=${"%.2f".format(fI)} " +
+                    "evals=${nm?.nFeval ?: 0} restarts=$nRestart")
+                f++
             }
-            val ti = now(); val dets = detector.detectBatch(listOf(bmp))[0]; val infMs = ms(ti)
-            val totalMs = ms(t0)
-            logger.row("candidates", listOf(f, cell, effIso(gainVal), expUs,
-                "%.6f".format(fI), 1, phase))
-            val path = logger.saveJpegAsync("${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
-            logFrame(f, "shin_nm_$mode", cell, gainVal, expUs, 1, false, formMs, infMs, totalMs,
-                dets, path, tieBreak = phase)
-            onFrame(bmp, dets, effIso(gainVal), expUs)
-            onStatus("ShinNM[$mode] f=$f $phase cell=$cell f(I)=${"%.2f".format(fI)} " +
-                "evals=${nm?.nFeval ?: 0} restarts=$nRestart")
-            f++
         }
         endPass()
     }
@@ -596,32 +691,38 @@ class MeasurementController(
             .put("baseline", "neural_ae_cvpr21_style").put("variant", "hist_scalar")
             .put("mode", "ema").put("weights_bytes", weights.size)
             .put("start_rule", "proposed_cold_start_cell (sim: AE metering cell)"))
-        var cell = grid.cell(grid.nGain - 1, 0)
-        var logE = Math.log(NaeSnap.cellE(cell, grid.gains, grid.exposuresUs))
-        var f = 0
-        while (running && f < maxFrames) {
-            val t0 = now()
-            val (gi, sj) = grid.indices(cell)
-            val gainVal = grid.gains[gi]; val expUs = grid.exposuresUs[sj]
-            val frames = raw.capture(expUs, gainVal, 1)
-            if (frames.isEmpty()) break
-            val tf = now(); val bmp = bitmapFromRaw(frames[0]); val formMs = ms(tf)
-            val ti = now(); val dets = detector.detectBatch(listOf(bmp))[0]; val infMs = ms(ti)
-            val px = IntArray(bmp.width * bmp.height)
-            bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-            val lum = ShinMetric.lumFromArgb(px, bmp.width, bmp.height)
-            val hist = NaeFeatures.multiScaleHist(lum, bmp.width, bmp.height)
-            val logU = net.predictLogU(hist)
-            val totalMs = ms(t0)
-            val path = logger.saveJpegAsync("${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
-            logFrame(f, "nae_hist_scalar_ema", cell, gainVal, expUs, 1, false,
-                formMs, infMs, totalMs, dets, path)
-            onFrame(bmp, dets, effIso(gainVal), expUs)
-            onStatus("NAE f=$f cell=$cell logU=${"%.3f".format(logU)} ${"%.0f".format(totalMs)}ms")
-            val target = Math.log(NaeSnap.cellE(cell, grid.gains, grid.exposuresUs)) + logU
-            logE = NaeSnap.emaLogE(logE, target)
-            cell = NaeSnap.splitAndSnap(Math.exp(logE), grid.gains, grid.exposuresUs)
-            f++
+        withFastPipeline(onStatus) { pipe ->
+            var cell = grid.cell(grid.nGain - 1, 0)
+            var logE = Math.log(NaeSnap.cellE(cell, grid.gains, grid.exposuresUs))
+            var f = 0
+            while (running && f < maxFrames) {
+                val t0 = now()
+                val (gi, sj) = grid.indices(cell)
+                val gainVal = grid.gains[gi]; val expUs = grid.exposuresUs[sj]
+                val frames = pipe.capture(expUs, gainVal, 1)
+                if (frames.isEmpty()) break
+                val tf = now()
+                val (tensor, detsAll) = pipe.formAndDetect(frames, pipe.identityCell)
+                val formMs = ms(tf)
+                val dets = detsAll[0]
+                val bmp = pipe.bitmap(tensor, 0)
+                val px = IntArray(bmp.width * bmp.height)
+                bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+                val lum = ShinMetric.lumFromArgb(px, bmp.width, bmp.height)
+                val hist = NaeFeatures.multiScaleHist(lum, bmp.width, bmp.height)
+                val logU = net.predictLogU(hist)
+                val totalMs = ms(t0)
+                val path = logger.saveJpegAsync(
+                    "${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
+                logFrame(f, "nae_hist_scalar_ema", cell, gainVal, expUs, 1, false,
+                    formMs, pipe.inferMs, totalMs, dets, path)
+                onFrame(bmp, pipe.previewDets(dets, tensor, 0), effIso(gainVal), expUs)
+                onStatus("NAE f=$f cell=$cell logU=${"%.3f".format(logU)} ${"%.0f".format(totalMs)}ms")
+                val target = Math.log(NaeSnap.cellE(cell, grid.gains, grid.exposuresUs)) + logU
+                logE = NaeSnap.emaLogE(logE, target)
+                cell = NaeSnap.splitAndSnap(Math.exp(logE), grid.gains, grid.exposuresUs)
+                f++
+            }
         }
         endPass()
     }
@@ -662,8 +763,6 @@ class MeasurementController(
             .put("supervision", "v3 sumconf surface"))
         logger.csv("candidates", listOf("frame", "cell", "gain", "exposure_us",
             "sum_conf", "chosen", "tie_break"))
-        val source = ParallelRawCandidateSource(grid, raw,
-            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
         val allCells = IntArray(grid.nGain * grid.nShutter) { it }
         val lnM = 2.302585092994046
         // Samples held from the previous step, waiting for this step's surface to label them.
@@ -675,66 +774,72 @@ class MeasurementController(
         }
         var anchor = grid.cell(grid.nGain - 1, 0)
         var written = 0
-        var f = 0
-        while (running && f < maxFrames && written < targetSamples) {
-            val t0 = now()
-            val frames = raw.capture(grid.fastestExposureUs, grid.baseGain, grid.maxBurst)
-            if (frames.isEmpty()) break
-            val tf = now()
-            val bitmaps = source.formAllCells(frames, allCells)
-            val formMs = ms(tf)
-            val ti = now(); val detsAll = detector.detectBatch(bitmaps); val inferMs = ms(ti)
-            val scores = DoubleArray(allCells.size) { Signal.sumConfV3(detsAll[it], selectConf) }
+        withFastPipeline(onStatus) { pipe ->
+            var f = 0
+            while (running && f < maxFrames && written < targetSamples) {
+                val t0 = now()
+                val frames = pipe.capture(grid.fastestExposureUs, grid.baseGain, grid.maxBurst)
+                if (frames.isEmpty()) break
+                val tf = now()
+                val (tensor, detsAll) = pipe.formAndDetect(frames, allCells)
+                val formMs = ms(tf)
+                val scores = DoubleArray(allCells.size) { Signal.sumConfV3(detsAll[it], selectConf) }
 
-            // Label the previous step's samples from this step's argmax.
-            var best = 0
-            for (k in scores.indices) if (scores[k] > scores[best]) best = k
-            if (pending.isNotEmpty() && scores[best] > 0.0) {
-                val eBest = NaeSnap.cellE(allCells[best], grid.gains, grid.exposuresUs)
-                val batch = pending.map { (cell, hist) ->
-                    val e = NaeSnap.cellE(cell, grid.gains, grid.exposuresUs)
-                    NaeTrainer.Sample(hist, Math.log(eBest / e).coerceIn(-lnM, lnM))
+                // Label the previous step's samples from this step's argmax.
+                var best = 0
+                for (k in scores.indices) if (scores[k] > scores[best]) best = k
+                if (pending.isNotEmpty() && scores[best] > 0.0) {
+                    val eBest = NaeSnap.cellE(allCells[best], grid.gains, grid.exposuresUs)
+                    val batch = pending.map { (cell, hist) ->
+                        val e = NaeSnap.cellE(cell, grid.gains, grid.exposuresUs)
+                        NaeTrainer.Sample(hist, Math.log(eBest / e).coerceIn(-lnM, lnM))
+                    }
+                    NaeDataset.append(dataset, batch)
+                    written += batch.size
                 }
-                NaeDataset.append(dataset, batch)
-                written += batch.size
-            }
-            pending = emptyList()
+                pending = emptyList()
 
-            // Policy cell (argmax, hold on an empty surface) drives the preview and is
-            // always one of the sampled cells.
-            val chosen = if (scores[best] > 0.0) best else allCells.indexOf(anchor).coerceAtLeast(0)
-            anchor = allCells[chosen]
-            val picks = LinkedHashSet<Int>()
-            picks.add(chosen)
-            var guard = 0
-            while (picks.size < minOf(cellsPerStep, allCells.size) && guard++ < 64) {
-                picks.add(nextInt(allCells.size))
-            }
-            pending = picks.map { k ->
-                val bmp = bitmaps[k]
-                val px = IntArray(bmp.width * bmp.height)
-                bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-                val lum = ShinMetric.lumFromArgb(px, bmp.width, bmp.height)
-                allCells[k] to NaeFeatures.multiScaleHist(lum, bmp.width, bmp.height)
-            }
+                // Policy cell (argmax, hold on an empty surface) drives the preview and is
+                // always one of the sampled cells.
+                val chosen = if (scores[best] > 0.0) best
+                             else allCells.indexOf(anchor).coerceAtLeast(0)
+                anchor = allCells[chosen]
+                val picks = LinkedHashSet<Int>()
+                picks.add(chosen)
+                var guard = 0
+                while (picks.size < minOf(cellsPerStep, allCells.size) && guard++ < 64) {
+                    picks.add(nextInt(allCells.size))
+                }
+                pending = picks.map { k ->
+                    val b = pipe.bitmap(tensor, k)
+                    val p = IntArray(b.width * b.height)
+                    b.getPixels(p, 0, b.width, 0, 0, b.width, b.height)
+                    val l = ShinMetric.lumFromArgb(p, b.width, b.height)
+                    val h = NaeFeatures.multiScaleHist(l, b.width, b.height)
+                    if (k != chosen) b.recycle()
+                    allCells[k] to h
+                }
 
-            val totalMs = ms(t0)
-            for (k in allCells.indices) {
-                val (gi, sj) = grid.indices(allCells[k])
-                logger.row("candidates", listOf(f, allCells[k], effIso(grid.gains[gi]),
-                    grid.exposuresUs[sj], "%.5f".format(scores[k]),
-                    if (k == chosen) 1 else 0, if (k == chosen) "collect" else ""))
+                val totalMs = ms(t0)
+                for (k in allCells.indices) {
+                    val (gi, sj) = grid.indices(allCells[k])
+                    logger.row("candidates", listOf(f, allCells[k], effIso(grid.gains[gi]),
+                        grid.exposuresUs[sj], "%.5f".format(scores[k]),
+                        if (k == chosen) 1 else 0, if (k == chosen) "collect" else ""))
+                }
+                val (gi, sj) = grid.indices(anchor)
+                val gainVal = grid.gains[gi]; val expUs = grid.exposuresUs[sj]
+                val bmp = pipe.bitmap(tensor, chosen)
+                val path = logger.saveJpegAsync("${frameName(f)}_cell${anchor}", bmp)
+                logFrame(f, "nae_collect", anchor, gainVal, expUs, allCells.size, true,
+                    formMs, pipe.inferMs, totalMs, detsAll[chosen], path, tieBreak = "collect")
+                onFrame(bmp, pipe.previewDets(detsAll[chosen], tensor, chosen),
+                    effIso(gainVal), expUs)
+                onStatus("NAE collect: $written/$targetSamples samples · frame $f/$maxFrames" +
+                    if (scores[best] <= 0.0) " · no detections — point at vehicles" else
+                        " · best=${"%.2f".format(scores[best])}")
+                f++
             }
-            val (gi, sj) = grid.indices(anchor)
-            val gainVal = grid.gains[gi]; val expUs = grid.exposuresUs[sj]
-            val path = logger.saveJpegAsync("${frameName(f)}_cell${anchor}", bitmaps[chosen])
-            logFrame(f, "nae_collect", anchor, gainVal, expUs, allCells.size, true,
-                formMs, inferMs, totalMs, detsAll[chosen], path, tieBreak = "collect")
-            onFrame(bitmaps[chosen], detsAll[chosen], effIso(gainVal), expUs)
-            onStatus("NAE collect: $written/$targetSamples samples · frame $f/$maxFrames" +
-                if (scores[best] <= 0.0) " · no detections — point at vehicles" else
-                    " · best=${"%.2f".format(scores[best])}")
-            f++
         }
         endPass()
         return written
@@ -754,40 +859,59 @@ class MeasurementController(
         // Custom AE seed; replaced every frame by the brightness feedback below.
         var nextIso = grid.baseGain
         var nextExpUs = grid.fastestExposureUs
+        if (aeStrategy == AeStrategy.CUSTOM_BRIGHTNESS) {
+            // Deterministic AE is manual-keyed capture, so it rides the optimized pipeline
+            // and its per-step cost is comparable with the controller's.
+            withFastPipeline(onStatus) { pipe ->
+                var f = 0
+                while (running && f < maxFrames) {
+                    val t0 = now()
+                    val frames = pipe.capture(nextExpUs, nextIso, 1)
+                    if (frames.isEmpty()) break
+                    val tf = now()
+                    val (tensor, detsAll) = pipe.formAndDetect(frames, pipe.identityCell)
+                    val formMs = ms(tf)
+                    val dets = detsAll[0]
+                    val totalMs = ms(t0)
+                    val gainVal = nextIso; val expUs = nextExpUs
+                    val bmp = pipe.bitmap(tensor, 0)
+                    val path = logger.saveJpegAsync(
+                        "${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
+                    logFrame(f, "ae", -1, gainVal, expUs, 1, false, formMs,
+                        pipe.inferMs, totalMs, dets, path)
+                    onFrame(bmp, pipe.previewDets(dets, tensor, 0), effIso(gainVal), expUs)
+                    onStatus("AE[custom] f=$f iso=${effIso(gainVal)} exp=${expUs}us " +
+                        "ndet=${dets.size} ${"%.0f".format(totalMs)}ms")
+                    val ratio = meanRawRatio(frames[0])
+                    val (newIso, newExp) = customAe!!.next(gainVal, expUs, ratio)
+                    nextIso = newIso; nextExpUs = newExp
+                    f++
+                }
+            }
+            endPass()
+            return
+        }
+        // PHONE AE needs the HAL's own AE-on requests, which run through the legacy
+        // one-shot path (captureAe re-arms the reader listener and would fight the
+        // persistent fast listener). Its per-step latency is therefore NOT comparable
+        // with pipeline-generation runs — it measures the HAL's policy, not our cost.
         var f = 0
         while (running && f < maxFrames) {
             val t0 = now()
-            val frames = when (aeStrategy) {
-                AeStrategy.PHONE -> raw.captureAe(1)
-                AeStrategy.CUSTOM_BRIGHTNESS -> raw.capture(nextExpUs, nextIso, 1)
-            }
+            val frames = raw.captureAe(1)
             if (frames.isEmpty()) break
             val tf = now()
             val bmp = bitmapFromRaw(frames[0])
             val formMs = ms(tf)
             val ti = now(); val dets = detector.detectBatch(listOf(bmp))[0]; val infMs = ms(ti)
             val totalMs = ms(t0)
-            val gainVal: Int; val expUs: Int
-            when (aeStrategy) {
-                AeStrategy.PHONE -> {
-                    val applied = raw.lastMeta.firstOrNull()
-                    gainVal = applied?.appliedIso ?: -1
-                    expUs = (applied?.appliedExpUs ?: -1L).toInt()
-                }
-                AeStrategy.CUSTOM_BRIGHTNESS -> {
-                    gainVal = nextIso
-                    expUs = nextExpUs
-                }
-            }
+            val applied = raw.lastMeta.firstOrNull()
+            val gainVal = applied?.appliedIso ?: -1
+            val expUs = (applied?.appliedExpUs ?: -1L).toInt()
             val path = logger.saveJpegAsync("${frameName(f)}_${isoExpTag(effIso(gainVal), expUs)}", bmp)
             logFrame(f, "ae", -1, gainVal, expUs, 1, false, formMs, infMs, totalMs, dets, path)
             onFrame(bmp, dets, effIso(gainVal), expUs)
-            onStatus("AE[${aeStrategy.tag()}] f=$f iso=${effIso(gainVal)} exp=${expUs}us ndet=${dets.size} ${"%.0f".format(totalMs)}ms")
-            if (customAe != null) {
-                val ratio = meanRawRatio(frames[0])
-                val (newIso, newExp) = customAe.next(gainVal, expUs, ratio)
-                nextIso = newIso; nextExpUs = newExp
-            }
+            onStatus("AE[phone] f=$f iso=${effIso(gainVal)} exp=${expUs}us ndet=${dets.size} ${"%.0f".format(totalMs)}ms")
             f++
         }
         endPass()
@@ -811,26 +935,52 @@ class MeasurementController(
             .apply { if (customAe != null) put("custom_ae", customAe.toJson()) })
         var nextIso = grid.baseGain
         var nextExpUs = grid.fastestExposureUs
+        if (aeStrategy == AeStrategy.CUSTOM_BRIGHTNESS) {
+            // Fully manual-keyed, so it rides the optimized pipeline — this is the
+            // "AE custom" arm that appears in cost tables next to the controller.
+            withFastPipeline(onStatus) { pipe ->
+                var f = 0
+                while (running && f < maxFrames) {
+                    val t0 = now()
+                    val aeIso = nextIso; val aeExpUs = nextExpUs
+                    val (qGi, qSj) = quantizeToGrid(aeIso, aeExpUs)
+                    val qGain = grid.gains[qGi]; val qExp = grid.exposuresUs[qSj]
+                    val qCell = grid.cell(qGi, qSj)
+                    val qFrames = pipe.capture(qExp, qGain, 1)
+                    if (qFrames.isEmpty()) break
+                    val tfQ = now()
+                    val (tensor, detsAll) = pipe.formAndDetect(qFrames, pipe.identityCell)
+                    val formQMs = ms(tfQ)
+                    val detsQ = detsAll[0]
+                    val totalMs = ms(t0)
+                    val bmpQ = pipe.bitmap(tensor, 0)
+                    val pathQ = logger.saveJpegAsync(
+                        "frame_%04d_aequant_%s".format(f, isoExpTag(effIso(qGain), qExp)), bmpQ)
+                    logFrame(f, "ae_quant", qCell, qGain, qExp, 1, false, formQMs,
+                        pipe.inferMs, totalMs, detsQ, pathQ, aeIso = aeIso, aeExpUs = aeExpUs)
+                    onFrame(bmpQ, pipe.previewDets(detsQ, tensor, 0), effIso(qGain), qExp)
+                    onStatus("AE_quant[custom] f=$f AE→(iso=${effIso(aeIso)}, exp=${aeExpUs}us) " +
+                        "→ cell=$qCell ${"%.0f".format(totalMs)}ms")
+                    val ratio = meanRawRatio(qFrames[0])
+                    val (newIso, newExp) = customAe!!.next(aeIso, aeExpUs, ratio)
+                    nextIso = newIso; nextExpUs = newExp
+                    f++
+                }
+            }
+            endPass()
+            return
+        }
+        // PHONE strategy stays on the legacy path: it must interleave AE-on captures,
+        // which the persistent fast listener cannot host. Not cost-comparable.
         var f = 0
         while (running && f < maxFrames) {
             val t0 = now()
-            // Phone AE only reveals its choice through a real capture; Custom AE computes it.
-            val aeIso: Int; val aeExpUs: Int
-            val aeRawForFeedback: RawFrame?
-            when (aeStrategy) {
-                AeStrategy.PHONE -> {
-                    val aeFrames = raw.captureAe(1)
-                    if (aeFrames.isEmpty()) break
-                    val aeMeta = raw.lastMeta.firstOrNull()
-                    aeIso = aeMeta?.appliedIso ?: -1
-                    aeExpUs = (aeMeta?.appliedExpUs ?: -1L).toInt()
-                    aeRawForFeedback = aeFrames[0]
-                }
-                AeStrategy.CUSTOM_BRIGHTNESS -> {
-                    aeIso = nextIso; aeExpUs = nextExpUs
-                    aeRawForFeedback = null   // feedback comes from the quantized frame instead
-                }
-            }
+            val aeFrames = raw.captureAe(1)
+            if (aeFrames.isEmpty()) break
+            val aeMeta = raw.lastMeta.firstOrNull()
+            val aeIso = aeMeta?.appliedIso ?: -1
+            val aeExpUs = (aeMeta?.appliedExpUs ?: -1L).toInt()
+            val aeRawForFeedback: RawFrame = aeFrames[0]
 
             if (!running) break
 
@@ -848,15 +998,7 @@ class MeasurementController(
                 detsQ, pathQ, aeIso = aeIso, aeExpUs = aeExpUs)
 
             onFrame(bmpQ, detsQ, effIso(qGain), qExp)
-            onStatus("AE_quant[${aeStrategy.tag()}] f=$f AE→(iso=${effIso(aeIso)}, exp=${aeExpUs}us) → cell=$qCell ${"%.0f".format(totalMs)}ms")
-            // Prefer AE's own capture for brightness feedback — it is closer to the exposure
-            // AE actually asked for than the quantized one is.
-            if (customAe != null) {
-                val src = aeRawForFeedback ?: qFrames[0]
-                val ratio = meanRawRatio(src)
-                val (newIso, newExp) = customAe.next(aeIso, aeExpUs, ratio)
-                nextIso = newIso; nextExpUs = newExp
-            }
+            onStatus("AE_quant[phone] f=$f AE→(iso=${effIso(aeIso)}, exp=${aeExpUs}us) → cell=$qCell ${"%.0f".format(totalMs)}ms")
             f++
         }
         endPass()
