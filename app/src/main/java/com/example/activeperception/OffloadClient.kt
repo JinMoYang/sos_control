@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * OkHttp callbacks run on its dispatcher pool, so both file appends are lock-guarded.
  */
 class OffloadClient(
-    private val serverUrl: String,        // e.g. "http://192.168.50.10:8000"
+    private val serverUrl: String,        // e.g. "http://147.46.244.63:8000"
     logDir: File,                         // same run dir as frames.csv
     private val regime: String,           // network regime label; server applies the delay
     private val currentFrame: () -> Int   // live frame id, for staleness

@@ -162,7 +162,7 @@ class MeasurementActivity : AppCompatActivity() {
         confThreshSpinner.adapter = ArrayAdapter(this,
             android.R.layout.simple_spinner_item, confChoices
         ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-        confThreshSpinner.setSelection(confChoices.indexOf("0.25").coerceAtLeast(0))
+        confThreshSpinner.setSelection(confChoices.indexOf("0.05").coerceAtLeast(0))
         offloadCheck = findViewById(R.id.offloadCheck)
         offloadUrl = findViewById(R.id.offloadUrl)
         offloadRegime = findViewById(R.id.offloadRegime)

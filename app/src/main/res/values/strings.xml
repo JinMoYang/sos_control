@@ -12,7 +12,7 @@
     <string name="method_proposed">Proposed</string>
 
     <string name="offload">Offload</string>
-    <string name="offload_url_default">http://192.168.50.10:8000</string>
+    <string name="offload_url_default">http://147.46.244.63:8000</string>
     <string name="offload_url_hint">http://server-ip:8000</string>
 
     <string name="label_fixed_cell">Fixed cell  (row = gain  ↑  /  col = exposure →)</string>
