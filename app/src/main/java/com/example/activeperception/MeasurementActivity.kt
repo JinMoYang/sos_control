@@ -84,8 +84,6 @@ class MeasurementActivity : AppCompatActivity() {
     private lateinit var fallbackGroup: RadioGroup
     private lateinit var boostGroup: RadioGroup
     private lateinit var proposedSettings: LinearLayout
-    private lateinit var aeSettings: LinearLayout
-    private lateinit var aeStrategyGroup: RadioGroup
     private lateinit var confThreshSpinner: Spinner
     private lateinit var offloadCheck: CheckBox
     private lateinit var offloadUrl: EditText
@@ -150,8 +148,6 @@ class MeasurementActivity : AppCompatActivity() {
         fallbackGroup = findViewById(R.id.fallbackGroup)
         boostGroup = findViewById(R.id.boostGroup)
         proposedSettings = findViewById(R.id.proposedSettings)
-        aeSettings = findViewById(R.id.aeSettings)
-        aeStrategyGroup = findViewById(R.id.aeStrategyGroup)
         confThreshSpinner = findViewById(R.id.confThreshSpinner)
         val confChoices = (1..10).map { "%.2f".format(it * 0.05) }   // 0.05 .. 0.50
         confThreshSpinner.adapter = ArrayAdapter(this,
@@ -196,32 +192,29 @@ class MeasurementActivity : AppCompatActivity() {
         grid.digitalBoost = boostFromCheckedId(boostGroup.checkedRadioButtonId)
         buildCellGrid()
         // The two method rows act as ONE mutually-exclusive choice: checking in either
-        // group clears the other (guarded against the recursive clear callback).
+        // group clears the other (guarded against the recursive clear callback). The
+        // settings panels key on the radio id, whichever row it lives in.
         val methodGroup2: RadioGroup = findViewById(R.id.methodGroup2)
         var syncingMethodRows = false
+        fun applyMethodVisibility(id: Int) {
+            cellGridWrap.visibility = if (id == R.id.methodFixed) View.VISIBLE else View.GONE
+            proposedSettings.visibility = if (id == R.id.methodProposed) View.VISIBLE else View.GONE
+        }
         methodGroup.setOnCheckedChangeListener { _, id ->
             if (id != -1 && !syncingMethodRows) {
                 syncingMethodRows = true; methodGroup2.clearCheck(); syncingMethodRows = false
             }
-            cellGridWrap.visibility = if (id == R.id.methodFixed) View.VISIBLE else View.GONE
-            proposedSettings.visibility = if (id == R.id.methodProposed) View.VISIBLE else View.GONE
-            aeSettings.visibility =
-                if (id == R.id.methodAe || id == R.id.methodAeQuant) View.VISIBLE else View.GONE
+            if (id != -1) applyMethodVisibility(id)
         }
         methodGroup2.setOnCheckedChangeListener { _, id ->
             if (id != -1 && !syncingMethodRows) {
                 syncingMethodRows = true; methodGroup.clearCheck(); syncingMethodRows = false
             }
-            if (id != -1) {
-                cellGridWrap.visibility = View.GONE
-                proposedSettings.visibility = View.GONE
-                aeSettings.visibility = View.GONE
-            }
+            if (id != -1) applyMethodVisibility(id)
         }
         // Initial state mirrors the default-checked methodProposed radio.
         cellGridWrap.visibility = View.GONE
         proposedSettings.visibility = View.VISIBLE
-        aeSettings.visibility = View.GONE
 
         // Grid is mutated in place; the rebuild refreshes the effective-ISO labels.
         boostGroup.setOnCheckedChangeListener { _, id ->
@@ -446,11 +439,6 @@ class MeasurementActivity : AppCompatActivity() {
         else -> 2.0
     }
 
-    private fun aeStrategyFromCheckedId(id: Int): AeStrategy = when (id) {
-        R.id.aeCustom -> AeStrategy.CUSTOM_BRIGHTNESS
-        else -> AeStrategy.PHONE
-    }
-
     private fun effectiveIso(gainIdx: Int): Int =
         (grid.gains[gainIdx] * grid.digitalBoost).toInt()
 
@@ -567,22 +555,6 @@ class MeasurementActivity : AppCompatActivity() {
                 else start("nae") { mc!!.runNeuralAe(w, 300, ::post, ::onFrameWithOffload) }
                 return
             }
-        }
-        when (methodGroup.checkedRadioButtonId) {
-            R.id.methodFixed -> {
-                val (gi, sj) = grid.indices(selectedCell)
-                start("fixed_g${grid.gains[gi]}_e${grid.exposuresUs[sj]}") {
-                    mc!!.runFixed(gi, sj, 300, gtRef, ::post, ::onFrameWithOffload)
-                }
-            }
-            R.id.methodAe -> {
-                val ae = aeStrategyFromCheckedId(aeStrategyGroup.checkedRadioButtonId)
-                start("ae_${ae.tag()}") { mc!!.runAe(300, gtRef, ae, ::post, ::onFrameWithOffload) }
-            }
-            R.id.methodAeQuant -> {
-                val ae = aeStrategyFromCheckedId(aeStrategyGroup.checkedRadioButtonId)
-                start("ae_paired_${ae.tag()}") { mc!!.runAeQuant(300, gtRef, ae, ::post, ::onFrameWithOffload) }
-            }
             R.id.methodProposed -> {
                 val period = when (periodGroup.checkedRadioButtonId) {
                     R.id.period9 -> 9
@@ -600,6 +572,29 @@ class MeasurementActivity : AppCompatActivity() {
                     mc!!.runFinalProposed(period, 300, fallback,
                         onStatus = ::post, onFrame = ::onFrameWithOffload)
                 }
+                return
+            }
+        }
+        // AE strategies are flattened into distinct method radios — the arm is fully
+        // named by the id, no nested strategy group to consult.
+        when (methodGroup.checkedRadioButtonId) {
+            R.id.methodFixed -> {
+                val (gi, sj) = grid.indices(selectedCell)
+                start("fixed_g${grid.gains[gi]}_e${grid.exposuresUs[sj]}") {
+                    mc!!.runFixed(gi, sj, 300, gtRef, ::post, ::onFrameWithOffload)
+                }
+            }
+            R.id.methodAePhone -> start("ae_phone") {
+                mc!!.runAe(300, gtRef, AeStrategy.PHONE, ::post, ::onFrameWithOffload)
+            }
+            R.id.methodAeCustom -> start("ae_custom") {
+                mc!!.runAe(300, gtRef, AeStrategy.CUSTOM_BRIGHTNESS, ::post, ::onFrameWithOffload)
+            }
+            R.id.methodAeQuantPhone -> start("ae_paired_phone") {
+                mc!!.runAeQuant(300, gtRef, AeStrategy.PHONE, ::post, ::onFrameWithOffload)
+            }
+            R.id.methodAeQuantCustom -> start("ae_paired_custom") {
+                mc!!.runAeQuant(300, gtRef, AeStrategy.CUSTOM_BRIGHTNESS, ::post, ::onFrameWithOffload)
             }
             else -> post("pick a method")
         }
@@ -610,7 +605,11 @@ class MeasurementActivity : AppCompatActivity() {
      *  one run at the learned midpoint while moving in +gyro-Y. */
     private fun startRotationSelectedMethod() {
         val gtRef = false
-        when (methodGroup.checkedRadioButtonId) {
+        // Rotation start supports the primary methods; the method id may sit in either
+        // radio row (Proposed lives in row 2 next to the baselines, which are excluded).
+        val selectedId = methodGroup.checkedRadioButtonId.takeIf { it != -1 }
+            ?: findViewById<RadioGroup>(R.id.methodGroup2).checkedRadioButtonId
+        when (selectedId) {
             R.id.methodFixed -> {
                 val (gi, sj) = grid.indices(selectedCell)
                 val expUs = grid.exposuresUs[sj]
@@ -619,15 +618,17 @@ class MeasurementActivity : AppCompatActivity() {
                     mc!!.runFixed(gi, sj, 300, gtRef, ::post, ::onFrameWithOffload)
                 }
             }
-            R.id.methodAe -> {
-                val ae = aeStrategyFromCheckedId(aeStrategyGroup.checkedRadioButtonId)
+            R.id.methodAePhone, R.id.methodAeCustom -> {
+                val ae = if (selectedId == R.id.methodAePhone) AeStrategy.PHONE
+                         else AeStrategy.CUSTOM_BRIGHTNESS
                 startRotation("ae_${ae.tag()}", grid.fastestExposureUs, grid.baseGain, 1,
                     grid.fastestExposureUs * 1_000L / 2L) {
                     mc!!.runAe(300, gtRef, ae, ::post, ::onFrameWithOffload)
                 }
             }
-            R.id.methodAeQuant -> {
-                val ae = aeStrategyFromCheckedId(aeStrategyGroup.checkedRadioButtonId)
+            R.id.methodAeQuantPhone, R.id.methodAeQuantCustom -> {
+                val ae = if (selectedId == R.id.methodAeQuantPhone) AeStrategy.PHONE
+                         else AeStrategy.CUSTOM_BRIGHTNESS
                 startRotation("ae_paired_${ae.tag()}", grid.fastestExposureUs, grid.baseGain, 1,
                     grid.fastestExposureUs * 1_000L / 2L) {
                     mc!!.runAeQuant(300, gtRef, ae, ::post, ::onFrameWithOffload)
@@ -901,12 +902,6 @@ class MeasurementActivity : AppCompatActivity() {
     private fun configurePhoneProfileUi() {
         findViewById<View>(R.id.touchpadHelp).visibility = View.GONE
         btnRotationStart.visibility = View.GONE
-        // Custom AE is the cost-comparable strategy (deterministic, fast pipeline); the
-        // HAL's own AE runs the legacy one-shot path and is a fidelity baseline only —
-        // defaulting to Custom keeps an absent-minded Start from recording the arm whose
-        // latency cannot sit in the cost table, and the label says why.
-        findViewById<android.widget.RadioButton>(R.id.aeCustom).isChecked = true
-        findViewById<android.widget.RadioButton>(R.id.aePhone).text = "Phone AE (legacy)"
         updateProfileSummary()
     }
 

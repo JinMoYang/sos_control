@@ -71,31 +71,34 @@
                 android:textColor="@color/text_readout"
                 android:textSize="10sp" />
 
-            <!-- Method. Each selection shows its own settings section below. -->
+            <!-- Method, two linked rows (the Activity makes them one exclusive choice).
+                 AE strategies are flattened into distinct methods so a run's arm is
+                 chosen - and visible - in one place, with no nested strategy group. -->
             <RadioGroup
                 android:id="@+id/methodGroup"
                 style="@style/OptionRow"
                 android:layout_marginTop="0dp">
 
                 <RadioButton android:id="@+id/methodFixed"
-                    style="@style/Option" android:text="@string/method_fixed" />
-                <RadioButton android:id="@+id/methodAe"
-                    style="@style/Option" android:text="@string/method_ae" />
-                <RadioButton android:id="@+id/methodAeQuant"
-                    style="@style/Option" android:text="@string/method_ae_quant" />
-                <RadioButton android:id="@+id/methodProposed"
-                    style="@style/Option" android:text="@string/method_proposed"
-                    android:checked="true" />
+                    style="@style/Option.Narrow" android:text="@string/method_fixed" />
+                <RadioButton android:id="@+id/methodAePhone"
+                    style="@style/Option.Narrow" android:text="AE-Phone" />
+                <RadioButton android:id="@+id/methodAeCustom"
+                    style="@style/Option.Narrow" android:text="AE-Cust" />
+                <RadioButton android:id="@+id/methodAeQuantPhone"
+                    style="@style/Option.Narrow" android:text="AEq-Phone" />
+                <RadioButton android:id="@+id/methodAeQuantCustom"
+                    style="@style/Option.Narrow" android:text="AEq-Cust" />
             </RadioGroup>
 
-            <!-- Second method row: the published sensing baselines (sense/BASELINES.md).
-                 A separate RadioGroup because RadioGroup lays out one row; the Activity
-                 links the two into a single mutually-exclusive method choice. -->
             <RadioGroup
                 android:id="@+id/methodGroup2"
                 style="@style/OptionRow"
                 android:layout_marginTop="0dp">
 
+                <RadioButton android:id="@+id/methodProposed"
+                    style="@style/Option.Narrow" android:text="@string/method_proposed"
+                    android:checked="true" />
                 <RadioButton android:id="@+id/methodPhysSweep"
                     style="@style/Option.Narrow" android:text="PhysSweep" />
                 <RadioButton android:id="@+id/methodShinSel"
@@ -189,28 +192,6 @@
                     android:layout_width="0dp" android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:minHeight="40dp" />
-            </LinearLayout>
-
-            <!-- AE and AE_quant only. -->
-            <LinearLayout
-                android:id="@+id/aeSettings"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <TextView style="@style/SectionLabel" android:text="@string/label_ae_strategy" />
-
-                <RadioGroup
-                    android:id="@+id/aeStrategyGroup"
-                    style="@style/OptionRow">
-
-                    <RadioButton android:id="@+id/aePhone"
-                        style="@style/Option" android:text="@string/ae_phone"
-                        android:checked="true" />
-                    <RadioButton android:id="@+id/aeCustom"
-                        style="@style/Option" android:text="@string/ae_custom" />
-                </RadioGroup>
             </LinearLayout>
 
             <!-- Proposed only. -->
