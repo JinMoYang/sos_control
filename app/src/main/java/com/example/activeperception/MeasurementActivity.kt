@@ -131,6 +131,12 @@ class MeasurementActivity : AppCompatActivity() {
      *  `--es server_url http://...` extra. */
     private var offloader: OffloadClient? = null
 
+    /** `--ez offload_all true`: send every frame regardless of the router, so network
+     *  round-trip distributions can be collected from any scene — the router stays silent
+     *  on detection-free lab scenes. router.csv still records the real decisions, so
+     *  offline analysis can separate force-sent frames from would-have-sent ones. */
+    private val offloadAll by lazy { intent.getBooleanExtra("offload_all", false) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // A screen-off event pauses the Activity on RayNeo. Keep the display awake during an
@@ -992,7 +998,7 @@ class MeasurementActivity : AppCompatActivity() {
     private fun onFrameWithOffload(bmp: Bitmap, dets: List<Detection>, iso: Int, expUs: Int) {
         recordRotationFirstFramePose()
         showFrame(bmp, dets, iso, expUs)
-        offloader?.takeIf { mc?.lastRoutingDecision?.shouldOffload == true }?.let { o ->
+        offloader?.takeIf { offloadAll || mc?.lastRoutingDecision?.shouldOffload == true }?.let { o ->
             val frameIdx = mc?.lastFrameIdx ?: 0
             displayIoExecutor.execute {
                 val jpeg = ByteArrayOutputStream()
