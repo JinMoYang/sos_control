@@ -562,14 +562,21 @@ class MeasurementController(
                 // lane's detections are then free, and every lane's are logged.
                 val (tensor, detsAll) = pipe.formAndDetect(frames, allCells)
                 val formMs = ms(tf)
-                val scores = DoubleArray(allCells.size) { k ->
-                    val bmp = pipe.bitmap(tensor, k)
-                    val px = IntArray(bmp.width * bmp.height)
-                    bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-                    val s = ShinMetric.score(ShinMetric.lumFromArgb(px, bmp.width, bmp.height),
-                        bmp.width, bmp.height)
-                    bmp.recycle(); s
+                // f(I) costs a full-plane sort per lane (~150 ms at 640x640), so the nine
+                // lanes are scored on the fallback pool — serial scoring alone was 1.3 s
+                // per step, drowning the method's real cost.
+                val scoreFutures = allCells.indices.map { k ->
+                    fallbackPool.submit<Double> {
+                        val bmp = pipe.bitmap(tensor, k)
+                        val px = IntArray(bmp.width * bmp.height)
+                        bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+                        val s = ShinMetric.score(
+                            ShinMetric.lumFromArgb(px, bmp.width, bmp.height),
+                            bmp.width, bmp.height)
+                        bmp.recycle(); s
+                    }
                 }
+                val scores = DoubleArray(allCells.size) { scoreFutures[it].get() }
                 var chosen = 0
                 for (k in scores.indices) if (scores[k] > scores[chosen]) chosen = k
                 val dets = detsAll[chosen]
