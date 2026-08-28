@@ -56,11 +56,14 @@ class MeasurementActivity : AppCompatActivity() {
     companion object {
         private const val RAYNEO_FRAME_PERIOD_NS = 33_329_000L
         private const val START_DISPATCH_ALLOWANCE_NS = 10_000_000L
-        /** Neural-AE collection budget — see [trainNaeFromRecordings]. 3 cells x ~200
-         *  probe steps; the cap bounds a scene that yields nothing. */
+        /** Run modes have no frame cap: field passes follow a lap protocol the operator
+         *  ends with Stop. Storage stays modest (~85 KB per frame, img/ JPEGs only). */
+        private const val NO_FRAME_CAP = Int.MAX_VALUE
+        /** Neural-AE collection budget — see [trainNaeFromRecordings]. 3 cells x ~100
+         *  probe steps; the frame cap bounds a scene that yields nothing. */
         private const val NAE_CELLS_PER_STEP = 3
-        private const val NAE_TARGET_SAMPLES = 600
-        private const val NAE_MAX_FRAMES = 600
+        private const val NAE_TARGET_SAMPLES = 300
+        private const val NAE_MAX_FRAMES = 300
         /** Below this the pool is too small to hold out a meaningful validation split. */
         private const val NAE_MIN_TRAIN = 300
     }
@@ -543,18 +546,18 @@ class MeasurementActivity : AppCompatActivity() {
             R.id.methodPhysSweep -> {
                 val n = grid.nGain * grid.nShutter
                 start("physsweep_full_h$n") {
-                    mc!!.runPhysSweep(true, n, 300, ::post, ::onFrameWithOffload)
+                    mc!!.runPhysSweep(true, n, NO_FRAME_CAP, ::post, ::onFrameWithOffload)
                 }
                 return
             }
             R.id.methodShinNM -> {
-                start("shin_nm") { mc!!.runShinNM("restart_int", 300, ::post, ::onFrameWithOffload) }
+                start("shin_nm") { mc!!.runShinNM("restart_int", NO_FRAME_CAP, ::post, ::onFrameWithOffload) }
                 return
             }
             R.id.methodNeuralAe -> {
                 val w = loadNaeWeights()
                 if (w == null) post("NAE weights missing — Train NAE below, or push nae_hist_scalar_3x3.bin to the app files dir")
-                else start("nae") { mc!!.runNeuralAe(w, 300, ::post, ::onFrameWithOffload) }
+                else start("nae") { mc!!.runNeuralAe(w, NO_FRAME_CAP, ::post, ::onFrameWithOffload) }
                 return
             }
             R.id.methodProposed -> {
@@ -571,7 +574,7 @@ class MeasurementActivity : AppCompatActivity() {
                     else -> FallbackMetric.ENTROPY
                 }
                 start("proposed_p${period}_${fallback.tag()}") {
-                    mc!!.runFinalProposed(period, 300, fallback,
+                    mc!!.runFinalProposed(period, NO_FRAME_CAP, fallback,
                         onStatus = ::post, onFrame = ::onFrameWithOffload)
                 }
                 return
@@ -583,20 +586,20 @@ class MeasurementActivity : AppCompatActivity() {
             R.id.methodFixed -> {
                 val (gi, sj) = grid.indices(selectedCell)
                 start("fixed_g${grid.gains[gi]}_e${grid.exposuresUs[sj]}") {
-                    mc!!.runFixed(gi, sj, 300, gtRef, ::post, ::onFrameWithOffload)
+                    mc!!.runFixed(gi, sj, NO_FRAME_CAP, gtRef, ::post, ::onFrameWithOffload)
                 }
             }
             R.id.methodAePhone -> start("ae_phone") {
-                mc!!.runAe(300, gtRef, AeStrategy.PHONE, ::post, ::onFrameWithOffload)
+                mc!!.runAe(NO_FRAME_CAP, gtRef, AeStrategy.PHONE, ::post, ::onFrameWithOffload)
             }
             R.id.methodAeCustom -> start("ae_custom") {
-                mc!!.runAe(300, gtRef, AeStrategy.CUSTOM_BRIGHTNESS, ::post, ::onFrameWithOffload)
+                mc!!.runAe(NO_FRAME_CAP, gtRef, AeStrategy.CUSTOM_BRIGHTNESS, ::post, ::onFrameWithOffload)
             }
             R.id.methodAeQuantPhone -> start("ae_paired_phone") {
-                mc!!.runAeQuant(300, gtRef, AeStrategy.PHONE, ::post, ::onFrameWithOffload)
+                mc!!.runAeQuant(NO_FRAME_CAP, gtRef, AeStrategy.PHONE, ::post, ::onFrameWithOffload)
             }
             R.id.methodAeQuantCustom -> start("ae_paired_custom") {
-                mc!!.runAeQuant(300, gtRef, AeStrategy.CUSTOM_BRIGHTNESS, ::post, ::onFrameWithOffload)
+                mc!!.runAeQuant(NO_FRAME_CAP, gtRef, AeStrategy.CUSTOM_BRIGHTNESS, ::post, ::onFrameWithOffload)
             }
             else -> post("pick a method")
         }
@@ -617,7 +620,7 @@ class MeasurementActivity : AppCompatActivity() {
                 val expUs = grid.exposuresUs[sj]
                 startRotation("fixed_g${grid.gains[gi]}_e$expUs", expUs, grid.gains[gi], 1,
                     expUs * 1_000L / 2L) {
-                    mc!!.runFixed(gi, sj, 300, gtRef, ::post, ::onFrameWithOffload)
+                    mc!!.runFixed(gi, sj, NO_FRAME_CAP, gtRef, ::post, ::onFrameWithOffload)
                 }
             }
             R.id.methodAePhone, R.id.methodAeCustom -> {
@@ -625,7 +628,7 @@ class MeasurementActivity : AppCompatActivity() {
                          else AeStrategy.CUSTOM_BRIGHTNESS
                 startRotation("ae_${ae.tag()}", grid.fastestExposureUs, grid.baseGain, 1,
                     grid.fastestExposureUs * 1_000L / 2L) {
-                    mc!!.runAe(300, gtRef, ae, ::post, ::onFrameWithOffload)
+                    mc!!.runAe(NO_FRAME_CAP, gtRef, ae, ::post, ::onFrameWithOffload)
                 }
             }
             R.id.methodAeQuantPhone, R.id.methodAeQuantCustom -> {
@@ -633,7 +636,7 @@ class MeasurementActivity : AppCompatActivity() {
                          else AeStrategy.CUSTOM_BRIGHTNESS
                 startRotation("ae_paired_${ae.tag()}", grid.fastestExposureUs, grid.baseGain, 1,
                     grid.fastestExposureUs * 1_000L / 2L) {
-                    mc!!.runAeQuant(300, gtRef, ae, ::post, ::onFrameWithOffload)
+                    mc!!.runAeQuant(NO_FRAME_CAP, gtRef, ae, ::post, ::onFrameWithOffload)
                 }
             }
             R.id.methodProposed -> {
@@ -653,7 +656,7 @@ class MeasurementActivity : AppCompatActivity() {
                     grid.fastestExposureUs * 1_000L) / 2L
                 startRotation("proposed_p${period}_${fallback.tag()}",
                     grid.fastestExposureUs, grid.baseGain, grid.maxBurst, halfWindowNs) {
-                    mc!!.runFinalProposed(period, 300, fallback,
+                    mc!!.runFinalProposed(period, NO_FRAME_CAP, fallback,
                         onStatus = ::post, onFrame = ::onFrameWithOffload)
                 }
             }
