@@ -1084,45 +1084,33 @@ class MeasurementActivity : AppCompatActivity() {
         }
     }
 
-    /** Device-profiled detector. RayNeo ships the validated COCO5 tabletop head (its
-     *  experiment domain); other devices (S25) run the original 80-class model with the
-     *  vehicle-class selection filter, matching the sos_control phone experiments. Both use
-     *  the same GPU probe mode (AUTO backend, no silent CPU fallback).
+    /** Device-profiled detector. Both devices now run the vehicle domain — the 80-class
+     *  model with the V3 selection filter (sense/proxy.py classes: bicycle, car,
+     *  motorcycle, bus, truck) — on the same GPU probe mode (AUTO backend, no silent CPU
+     *  fallback). The COCO5 tabletop head the glass finalize shipped is retired.
      *
      *  RayNeo loads B1/B3 only: building the B=9 OpenCL delegate on a clean shader cache
      *  hangs on the glass (the finalize build hit this), so K=9 probes run as exact-slot
      *  chunks inside the detector instead. Phones keep B9 — their first compile is slow
-     *  (~1 min) but completes. */
-    private fun createProfiledDetector(): TfliteYoloDetector =
-        if (Build.MANUFACTURER.equals("RayNeo", ignoreCase = true)) TfliteYoloDetector(
+     *  (~1 min) but completes. `--ez no_b9 true` emulates the glass slot set on a phone
+     *  so the chunked path can be exercised without RayNeo hardware. */
+    private fun createProfiledDetector(): TfliteYoloDetector {
+        val excludeB9 = rayNeoTouchpad || intent.getBooleanExtra("no_b9", false)
+        return TfliteYoloDetector(
             this,
-            batchedAssets = listOf(
-                "yolov8n_640_coco5_fp16.tflite" to 1,
-                "yolov8n_640_b3_coco5_fp16.tflite" to 3
-            ),
-            numClasses = 5,
-            classIdMap = TfliteYoloDetector.COCO5_CLASS_IDS,
-            accelerator = TfliteYoloDetector.Accelerator.GPU,
-            allowFallback = false,
-            gpuBackend = TfliteYoloDetector.GpuBackend.AUTO,
-            onLoadStatus = ::post
-        ) else TfliteYoloDetector(
-            this,
-            // `--ez no_b9 true` emulates the glass slot set on a phone, so the K=9
-            // chunked-inference fallback can be exercised without RayNeo hardware.
             batchedAssets = listOf(
                 "yolov8n_640_fp16.tflite" to 1,
                 "yolov8n_640_b3_fp16.tflite" to 3,
                 "yolov8n_640_b9_fp16.tflite" to 9
-            ).filter { it.second < 9 || !intent.getBooleanExtra("no_b9", false) },
+            ).filter { it.second < 9 || !excludeB9 },
             numClasses = 80,
-            // V3 signal classes (sense/proxy.py): bicycle, car, motorcycle, bus, truck.
             allowed = setOf(1, 2, 3, 5, 7),
             accelerator = TfliteYoloDetector.Accelerator.GPU,
             allowFallback = false,
             gpuBackend = TfliteYoloDetector.GpuBackend.AUTO,
             onLoadStatus = ::post
         )
+    }
 
     /** Runs [block] on the persistent GPU worker with a fresh logger and controller, so each
      *  press gets its own run directory while the camera and three GPU interpreters are reused. */
