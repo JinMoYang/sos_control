@@ -1087,14 +1087,18 @@ class MeasurementActivity : AppCompatActivity() {
     /** Device-profiled detector. RayNeo ships the validated COCO5 tabletop head (its
      *  experiment domain); other devices (S25) run the original 80-class model with the
      *  vehicle-class selection filter, matching the sos_control phone experiments. Both use
-     *  the same GPU probe mode (AUTO backend, no silent CPU fallback). */
+     *  the same GPU probe mode (AUTO backend, no silent CPU fallback).
+     *
+     *  RayNeo loads B1/B3 only: building the B=9 OpenCL delegate on a clean shader cache
+     *  hangs on the glass (the finalize build hit this), so K=9 probes run as exact-slot
+     *  chunks inside the detector instead. Phones keep B9 — their first compile is slow
+     *  (~1 min) but completes. */
     private fun createProfiledDetector(): TfliteYoloDetector =
         if (Build.MANUFACTURER.equals("RayNeo", ignoreCase = true)) TfliteYoloDetector(
             this,
             batchedAssets = listOf(
                 "yolov8n_640_coco5_fp16.tflite" to 1,
-                "yolov8n_640_b3_coco5_fp16.tflite" to 3,
-                "yolov8n_640_b9_coco5_fp16.tflite" to 9
+                "yolov8n_640_b3_coco5_fp16.tflite" to 3
             ),
             numClasses = 5,
             classIdMap = TfliteYoloDetector.COCO5_CLASS_IDS,
@@ -1104,11 +1108,13 @@ class MeasurementActivity : AppCompatActivity() {
             onLoadStatus = ::post
         ) else TfliteYoloDetector(
             this,
+            // `--ez no_b9 true` emulates the glass slot set on a phone, so the K=9
+            // chunked-inference fallback can be exercised without RayNeo hardware.
             batchedAssets = listOf(
                 "yolov8n_640_fp16.tflite" to 1,
                 "yolov8n_640_b3_fp16.tflite" to 3,
                 "yolov8n_640_b9_fp16.tflite" to 9
-            ),
+            ).filter { it.second < 9 || !intent.getBooleanExtra("no_b9", false) },
             numClasses = 80,
             // V3 signal classes (sense/proxy.py): bicycle, car, motorcycle, bus, truck.
             allowed = setOf(1, 2, 3, 5, 7),

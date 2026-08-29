@@ -340,22 +340,54 @@ class TfliteYoloDetector(
     ): List<List<Detection>> {
         val count = batch.transforms.size
         if (count == 0) return emptyList()
-        val slot = slots.firstOrNull { it.batch == count }
-            ?: error("$experiment requires an exact B=$count interpreter")
+        slots.firstOrNull { it.batch == count }?.let { exact ->
+            return runTensorChunk(batch.input, 0, count, exact, batch.transforms, decoder)
+        }
+        // No exact interpreter for this K. The glass ships without B=9 (its OpenCL delegate
+        // hangs compiling batch-9 on a clean shader cache), so a full-grid probe runs as
+        // exact-slot chunks over zero-copy slices of the fused tensor. B=1 always loads,
+        // so any K decomposes into exact chunk sizes and no lane padding is needed.
+        val frameBytes = imgsz * imgsz * 3 * 4
+        val out = ArrayList<List<Detection>>(count)
+        var runMs = 0.0; var decMs = 0.0; var preNms = 0; var topK = 0
+        var i = 0
+        while (i < count) {
+            val slot = slots.last { it.batch <= count - i }
+            val view = batch.input.duplicate()
+            view.position(i * frameBytes)
+            view.limit((i + slot.batch) * frameBytes)
+            // slice() resets byte order to big-endian; restore the native order TFLite needs.
+            val slice = view.slice().order(ByteOrder.nativeOrder())
+            out.addAll(runTensorChunk(slice, i, slot.batch, slot, batch.transforms, decoder))
+            runMs += lastRunMs; decMs += lastDecodeMs
+            preNms += lastPreNmsCandidates; topK += lastTopKCandidates
+            i += slot.batch
+        }
+        lastRunMs = runMs; lastDecodeMs = decMs
+        lastPreNmsCandidates = preNms; lastTopKCandidates = topK
+        return out
+    }
+
+    /** One exact-batch interpreter pass over [input], decoding lanes against
+     *  transforms[offset until offset+lanes]. */
+    private fun runTensorChunk(
+        input: ByteBuffer, offset: Int, lanes: Int, slot: BatchSlot,
+        transforms: List<TensorLetterbox>, decoder: OptimizedYoloDecode
+    ): List<List<Detection>> {
         val expected = slot.batch * imgsz * imgsz * 3 * 4
-        require(batch.input.capacity() >= expected)
-        batch.input.rewind()
+        require(input.capacity() >= expected)
+        input.rewind()
         val tRun = System.nanoTime()
-        slot.interp.run(batch.input, slot.output)
+        slot.interp.run(input, slot.output)
         val tDec = System.nanoTime()
         // Each worker reads one immutable output lane and owns ThreadLocal primitive scratch.
-        val decoded = if (count == 1) {
+        val decoded = if (lanes == 1) {
             // A pool round trip is pure overhead when there is no batch-lane parallelism.
-            listOf(decoder.decode(slot.output[0], outputTransform(batch.transforms[0])))
+            listOf(decoder.decode(slot.output[0], outputTransform(transforms[offset])))
         } else {
-            val futures = (0 until count).map { lane ->
+            val futures = (0 until lanes).map { lane ->
                 decodePool.submit<OptimizedDecodeResult> {
-                    decoder.decode(slot.output[lane], outputTransform(batch.transforms[lane]))
+                    decoder.decode(slot.output[lane], outputTransform(transforms[offset + lane]))
                 }
             }
             futures.map { it.get() }

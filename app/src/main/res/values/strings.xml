@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">RayNeo SoS</string>
+    <string name="app_name">SoS Integrate</string>
 
     <string name="preview_description">Most recent formed frame</string>
     <string name="status_initial">RayNeo SoS — optimized pipeline ready</string>
