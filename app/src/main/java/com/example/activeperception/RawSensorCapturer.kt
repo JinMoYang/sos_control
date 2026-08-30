@@ -192,6 +192,9 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
      *  HAL can actually apply (a request past the range never metadata-approves). */
     var sensorIsoMin: Int = 100; private set
     var sensorIsoMax: Int = 1600; private set
+    /** SENSOR_MAX_ANALOG_SENSITIVITY — above this the sensor applies digital gain. 0 when
+     *  the HAL does not report it. */
+    var maxAnalogIso: Int = 0; private set
     var streamFormat: Int = ImageFormat.RAW_SENSOR; private set
     val streamFormatName: String get() = formatName(streamFormat)
     /** Min frame duration of the ACTIVE RAW stream, from the stream configuration map;
@@ -263,6 +266,8 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.let {
             sensorIsoMin = it.lower; sensorIsoMax = it.upper
         }
+        maxAnalogIso = chars.get(CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY) ?: 0
+        Log.i(TAG, "sensitivity range=[$sensorIsoMin,$sensorIsoMax] maxAnalog=$maxAnalogIso")
         cfaPattern = when (chars.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)) {
             CameraMetadata.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB -> "RGGB"
             CameraMetadata.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_GRBG -> "GRBG"

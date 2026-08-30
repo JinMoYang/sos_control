@@ -192,6 +192,9 @@ class MeasurementController(
         m.put("sync_max_latency", raw.syncMaxLatency)
         m.put("timestamp_source", raw.timestampSource)
         m.put("sensor_orientation", raw.sensorOrientation)
+        m.put("sensor_iso_range", JSONObject()
+            .put("min", raw.sensorIsoMin).put("max", raw.sensorIsoMax))
+        m.put("sensor_max_analog_iso", raw.maxAnalogIso)
         m.put("image_formation", JSONObject().apply {
             put("pipeline", colorPipeline.tag)
             put("orientation_applied_clockwise_degrees", raw.sensorOrientation)
