@@ -4321,8 +4321,10 @@ class MeasurementController(
         val targetRatio: Double = 0.40,    // bright but short of clipping
         val isoMin: Int = 100,
         val isoMax: Int = 1600,
-        val expMinUs: Int = 1000,
-        val expMaxUs: Int = 32_000,        // handheld motion-blur cap
+        // Exposure clamps aligned to the v2 lattice envelope (1/480..1/30), so every
+        // method shares one operating range; 33 ms doubles as the motion-blur cap.
+        val expMinUs: Int = 2083,
+        val expMaxUs: Int = 33_333,
         val maxStep: Double = 4.0          // per-call scale limit, damps dim -> bright swings
     ) {
         fun next(currentIso: Int, currentExpUs: Int, lastRatio: Double): Pair<Int, Int> {
