@@ -98,6 +98,7 @@ class MeasurementActivity : AppCompatActivity() {
     private lateinit var driveStatus: TextView
     private val prefs by lazy { getSharedPreferences("sos_ui", MODE_PRIVATE) }
     private lateinit var driveRowsView: LinearLayout
+    private lateinit var blockSecView: EditText
     private var driveMode = false
     private var driveRole = "A"
     private var driveShownAtMs = 0L
@@ -1025,18 +1026,26 @@ class MeasurementActivity : AppCompatActivity() {
     /** One block of the experiment: a snapshot of the settings screen. Applying a row
      *  restores those controls, so rows need no plumbing of their own — every run-start
      *  path keeps reading the same views it always did. */
-    private data class PlRow(val method: String, val period: Int,
-                             val sessionIdx: Int, val fallbackIdx: Int) {
-        fun encode() = "$method|$period|$sessionIdx|$fallbackIdx"
+    private data class PlRow(val method: String, val period: Int, val fallbackIdx: Int) {
+        fun encode() = "$method|$period|$fallbackIdx"
         companion object {
+            /** Also reads the older 4-field form, whose third field was the session
+             *  (now a screen-level setting, since a drive does not change scene). */
             fun decode(s: String): PlRow? {
                 val p = s.split('|')
-                if (p.size < 4) return null
-                return PlRow(p[0], p[1].toIntOrNull() ?: 10,
-                    p[2].toIntOrNull() ?: 0, p[3].toIntOrNull() ?: 4)
+                return when {
+                    p.size >= 4 -> PlRow(p[0], p[1].toIntOrNull() ?: 10, p[3].toIntOrNull() ?: 4)
+                    p.size == 3 -> PlRow(p[0], p[1].toIntOrNull() ?: 10, p[2].toIntOrNull() ?: 4)
+                    else -> null
+                }
             }
         }
     }
+
+    /** Period only steers the Proposed family, so it is the only row that shows one. */
+    private fun rowLabel(r: PlRow): String =
+        if (r.method == "prop_c" || r.method == "proposed") "${r.method} · p${r.period}"
+        else r.method
 
     private val methodIds = listOf(
         "fixed" to R.id.methodFixed,
@@ -1065,7 +1074,7 @@ class MeasurementActivity : AppCompatActivity() {
     private fun defaultRows(): MutableList<PlRow> =
         listOf("ae_cust", "ae_phone", "shin_nm", "physsweep", "nae")
             .flatMap { listOf("prop_c", it) }
-            .map { PlRow(it, 10, 0, 4) }
+            .map { PlRow(it, 10, 4) }
             .toMutableList()
 
     private fun loadRows() {
@@ -1096,9 +1105,32 @@ class MeasurementActivity : AppCompatActivity() {
                 dpBase[2] + bars.right, dpBase[3] + bars.bottom)
             insets
         }
-        driveRole = prefs.getString("role", "A") ?: "A"
+        // Two phones must not share a role. They cannot negotiate (the whole point is that
+        // no link is needed), so the first launch guesses from the device id and every row
+        // shows what the OTHER phone runs in that block — a collision is then visible at a
+        // glance and one tap on the role button fixes it.
+        driveRole = prefs.getString("role", null) ?: run {
+            val id = android.provider.Settings.Secure.getString(
+                contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "0"
+            val guess = if (abs(id.hashCode()) % 2 == 0) "A" else "B"
+            prefs.edit().putString("role", guess).apply()
+            guess
+        }
         driveFlip = prefs.getBoolean("flip", false)
         playlistBlockS = prefs.getInt("block_s", 120)
+        sessionSpinner.setSelection(prefs.getInt("session_idx", 0))
+        blockSecView = findViewById(R.id.driveBlockSec)
+        blockSecView.setText(playlistBlockS.toString())
+        // Buttons do not take focus in touch mode, so the focus listener alone would let an
+        // edited value sit uncommitted; Done commits it, and so does START.
+        blockSecView.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) commitBlockSec() }
+        blockSecView.setOnEditorActionListener { _, _, _ ->
+            commitBlockSec()
+            blockSecView.clearFocus()
+            (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
+                ?.hideSoftInputFromWindow(blockSecView.windowToken, 0)
+            true
+        }
         loadRows()
         // Offload survives launches too: in the car there is no chance to retype a URL.
         prefs.getString("offload_url", null)?.let { offloadUrl.setText(it) }
@@ -1107,16 +1139,17 @@ class MeasurementActivity : AppCompatActivity() {
             prefs.edit().putBoolean("offload_on", on)
                 .putString("offload_url", offloadUrl.text.toString()).apply()
         }
-        findViewById<Button>(R.id.driveRoleA).setOnClickListener { setDriveRole("A") }
-        findViewById<Button>(R.id.driveRoleB).setOnClickListener { setDriveRole("B") }
-        listOf(R.id.driveBlock60 to 60, R.id.driveBlock120 to 120, R.id.driveBlock180 to 180)
-            .forEach { (id, s) ->
-                findViewById<Button>(id).setOnClickListener {
-                    playlistBlockS = s
-                    prefs.edit().putInt("block_s", s).apply()
-                    updateDriveUi()
-                }
+        findViewById<Button>(R.id.driveRoleA).setOnClickListener {
+            setDriveRole(if (driveRole == "A") "B" else "A")
+        }
+        listOf(R.id.driveSessIndoor to 0, R.id.driveSessDay to 1,
+            R.id.driveSessDim to 2, R.id.driveSessNight to 3).forEach { (id, idx) ->
+            findViewById<Button>(id).setOnClickListener {
+                sessionSpinner.setSelection(idx)
+                prefs.edit().putInt("session_idx", idx).apply()
+                updateDriveUi()
             }
+        }
         findViewById<Button>(R.id.driveFlip).setOnClickListener {
             driveFlip = !driveFlip
             prefs.edit().putBoolean("flip", driveFlip).apply()
@@ -1185,7 +1218,17 @@ class MeasurementActivity : AppCompatActivity() {
             R.id.period10 -> 10; R.id.period20 -> 20; else -> 5
         }
         val fb = fallbackIds.indexOf(fallbackGroup.checkedRadioButtonId).coerceAtLeast(0)
-        return PlRow(method, period, sessionSpinner.selectedItemPosition, fb)
+        return PlRow(method, period, fb)
+    }
+
+    /** Free-form block length, clamped to something a run can actually fill. */
+    private fun commitBlockSec() {
+        val v = blockSecView.text.toString().toIntOrNull() ?: playlistBlockS
+        playlistBlockS = v.coerceIn(20, 3600)
+        if (blockSecView.text.toString() != playlistBlockS.toString())
+            blockSecView.setText(playlistBlockS.toString())
+        prefs.edit().putInt("block_s", playlistBlockS).apply()
+        updateDriveUi()
     }
 
     /** Restore a row into the settings screen — this is also how a block is launched. */
@@ -1196,7 +1239,6 @@ class MeasurementActivity : AppCompatActivity() {
         findViewById<android.widget.RadioButton>(when (row.period) {
             5 -> R.id.period5; 20 -> R.id.period20; else -> R.id.period10
         }).isChecked = true
-        sessionSpinner.setSelection(row.sessionIdx.coerceIn(0, 3))
         findViewById<android.widget.RadioButton>(
             fallbackIds[row.fallbackIdx.coerceIn(0, fallbackIds.size - 1)]).isChecked = true
     }
@@ -1241,9 +1283,12 @@ class MeasurementActivity : AppCompatActivity() {
             System.currentTimeMillis() % (playlistBlockS * 1000L)) / 1000
         rows.forEachIndexed { i, r ->
             val live = i == cur
+            // What the paired phone runs in this block, so a role collision (both phones
+            // on the same offset) shows up as prop_c facing prop_c.
+            val other = rows[(if (driveRole == "A") i + 1 else i - 1 + rows.size) % rows.size]
             val tv = TextView(this).apply {
-                text = (if (live) "▶ " else "   ") +
-                    "${r.method}  ·  p${r.period}  ·  ${sessionShort[r.sessionIdx.coerceIn(0, 3)]}" +
+                text = (if (live) "▶ " else "   ") + rowLabel(r) +
+                    "   ⟷ " + rowLabel(other) +
                     (if (live) "   (${left}s)" else "")
                 textSize = 16f
                 setTextColor(getColor(
@@ -1261,6 +1306,7 @@ class MeasurementActivity : AppCompatActivity() {
 
     private fun startDrivePlaylist() {
         if (rows.isEmpty()) { post("playlist is empty — add a row"); return }
+        commitBlockSec()
         playlistActive = true
         vibrate(120); playlistHandler.postDelayed({ vibrate(120) }, 220)
         startPlaylistBlock()
@@ -1271,13 +1317,11 @@ class MeasurementActivity : AppCompatActivity() {
         if (!::drivePanel.isInitialized) return
         val running = playlistActive || runActive
         driveStart.text = if (running) "STOP\n(hold)" else "START"
-        findViewById<Button>(R.id.driveRoleA).alpha = if (driveRole == "A") 1f else 0.35f
-        findViewById<Button>(R.id.driveRoleB).alpha = if (driveRole == "B") 1f else 0.35f
+        findViewById<Button>(R.id.driveRoleA).text = "ROLE $driveRole"
         findViewById<Button>(R.id.driveFlip).alpha = if (driveFlip) 1f else 0.35f
-        listOf(R.id.driveBlock60 to 60, R.id.driveBlock120 to 120, R.id.driveBlock180 to 180)
-            .forEach { (id, s) ->
-                findViewById<Button>(id).alpha = if (playlistBlockS == s) 1f else 0.35f
-            }
+        val si = sessionSpinner.selectedItemPosition
+        listOf(R.id.driveSessIndoor, R.id.driveSessDay, R.id.driveSessDim, R.id.driveSessNight)
+            .forEachIndexed { i, id -> findViewById<Button>(id).alpha = if (i == si) 1f else 0.35f }
         renderRows()
     }
 

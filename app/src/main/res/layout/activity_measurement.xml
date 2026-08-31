@@ -68,12 +68,6 @@
                     android:text="ROLE A" android:textSize="15sp"
                     android:minWidth="0dp" android:paddingLeft="6dp"
                     android:paddingRight="6dp" />
-                <Button android:id="@+id/driveRoleB"
-                    android:layout_width="0dp" android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:text="ROLE B" android:textSize="15sp"
-                    android:minWidth="0dp" android:paddingLeft="6dp"
-                    android:paddingRight="6dp" />
                 <Button android:id="@+id/driveFlip"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -88,26 +82,69 @@
                     android:paddingRight="10dp" />
             </LinearLayout>
 
-            <!-- Block length is global: the wall-clock alignment that pairs two phones
-                 without communication only works if both use the same period. -->
+            <!-- Session is one level up from the rows: a drive does not change scene
+                 between blocks, and hoisting it keeps each row to what actually varies. -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:layout_marginTop="6dp">
 
-                <Button android:id="@+id/driveBlock60"
+                <Button android:id="@+id/driveSessIndoor"
                     android:layout_width="0dp" android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:text="60s" android:textSize="13sp" />
-                <Button android:id="@+id/driveBlock120"
+                    android:text="Indoor" android:textSize="13sp"
+                    android:minWidth="0dp" android:paddingLeft="2dp"
+                    android:paddingRight="2dp" />
+                <Button android:id="@+id/driveSessDay"
                     android:layout_width="0dp" android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:text="120s" android:textSize="13sp" />
-                <Button android:id="@+id/driveBlock180"
+                    android:text="Day" android:textSize="13sp"
+                    android:minWidth="0dp" android:paddingLeft="2dp"
+                    android:paddingRight="2dp" />
+                <Button android:id="@+id/driveSessDim"
                     android:layout_width="0dp" android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:text="180s" android:textSize="13sp" />
+                    android:text="Dim" android:textSize="13sp"
+                    android:minWidth="0dp" android:paddingLeft="2dp"
+                    android:paddingRight="2dp" />
+                <Button android:id="@+id/driveSessNight"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="Night" android:textSize="13sp"
+                    android:minWidth="0dp" android:paddingLeft="2dp"
+                    android:paddingRight="2dp" />
+            </LinearLayout>
+
+            <!-- Block length is global and free-form: the wall-clock alignment that pairs
+                 two phones without communication only works if both use the same value. -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="6dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Block"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp" />
+                <EditText android:id="@+id/driveBlockSec"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:inputType="number"
+                    android:text="120"
+                    android:importantForAutofill="no"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="s"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp" />
             </LinearLayout>
 
             <Button android:id="@+id/driveStart"
