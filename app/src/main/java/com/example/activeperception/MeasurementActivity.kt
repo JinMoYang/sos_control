@@ -1232,9 +1232,10 @@ class MeasurementActivity : AppCompatActivity() {
             // Opening this screen can reveal the button under a finger still travelling
             // from the control that opened it, so the first moments are deaf.
             if (SystemClock.elapsedRealtime() - driveShownAtMs < 700) return@setOnClickListener
-            if (playlistActive || runActive) post("hold to stop")
+            if (playlistActive || runActive) { vibrate(400); stopMeasurement() }
             else startDrivePlaylist()
         }
+        // Long-press keeps working for anyone who learned it as the stop gesture.
         driveStart.setOnLongClickListener {
             if (playlistActive || runActive) { vibrate(400); stopMeasurement() }
             true
@@ -1377,10 +1378,12 @@ class MeasurementActivity : AppCompatActivity() {
                         isOnce(r.method) && prepStage == 2 -> "   (training…)"
                         isOnce(r.method) && prepDone -> "   (done)"
                         isOnce(r.method) -> "   (once, at START)"
-                        // The partner column only exists when a partner does.
+                        // The block number is printed while running so two phones can be
+                        // compared at a glance: same number means still in step.
                         live && platformTag() == "car" ->
-                            "   <-> " + rowLabel(otherRow(k)) + "   (" + left + "s)"
-                        live -> "   (" + left + "s)"
+                            "   <-> " + rowLabel(otherRow(k)) +
+                                (if (playlistActive) "   blk $k" else "") + "   (" + left + "s)"
+                        live -> (if (playlistActive) "   blk $k" else "") + "   (" + left + "s)"
                         else -> ""
                     }
                 textSize = 16f
@@ -1467,7 +1470,7 @@ class MeasurementActivity : AppCompatActivity() {
     private fun updateDriveUi() {
         if (!::drivePanel.isInitialized) return
         val running = playlistActive || runActive
-        driveStart.text = if (running) "STOP\n(hold)" else "START"
+        driveStart.text = if (running) "STOP" else "START"
         // Role only means something with two phones side by side, which is the car rig;
         // on the limo and the glass there is nothing to pair with, so it is not offered.
         val paired = platformTag() == "car"
