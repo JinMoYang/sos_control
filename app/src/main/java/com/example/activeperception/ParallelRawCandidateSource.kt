@@ -381,6 +381,63 @@ class ParallelRawCandidateSource(
     }
 
     /**
+     * Continuous-v2 formation: explicit per-lane burst counts (same-ISO FIRST_N sums over
+     * [frames]) and digital gain ratios relative to the frames AS CAPTURED, no grid
+     * coupling. The caller owns the rung bookkeeping; lanes sharing a burst count are
+     * filled in one native call, mirroring [formFusedNativeTensor]'s per-row grouping.
+     */
+    fun formExplicitBurstTensor(
+        frames: List<RawFrame>, laneBurstN: IntArray, gainRatios: DoubleArray,
+        imgsz: Int = 640
+    ): Exp21TensorResult {
+        require(frames.isNotEmpty())
+        require(laneBurstN.size == gainRatios.size && gainRatios.isNotEmpty())
+        val started = System.nanoTime()
+        val count = gainRatios.size
+        val floatsPerFrame = imgsz * imgsz * 3
+        val input = exp21TensorBuffers.computeIfAbsent(count) {
+            ByteBuffer.allocateDirect(count * floatsPerFrame * 4).order(ByteOrder.nativeOrder())
+        }
+        val f0 = frames[0]
+        val lut = lutFor(f0.maxDn)
+        NativeTensorPreprocessor.clearTensor(input, 0, count * floatsPerFrame, 114f / 255f)
+        val frameArrays = frames.map { it.bayer }.toTypedArray()
+        val byBurst = (0 until count).groupBy { laneBurstN[it] }
+        val degrees = (f0.sensorOrientation % 360 + 360) % 360
+        val rgbW = f0.width / 2; val rgbH = f0.height / 2
+        val orientedH = if (degrees == 90 || degrees == 270) rgbW else rgbH
+        val orientedW = if (degrees == 90 || degrees == 270) rgbH else rgbW
+        val scale = minOf(imgsz.toFloat() / orientedW, imgsz.toFloat() / orientedH)
+        val nh = Math.round(orientedH * scale)
+        val futures = ArrayList<java.util.concurrent.Future<Double>>()
+        for ((burstN, laneIdx) in byBurst) {
+            val gains = DoubleArray(laneIdx.size) { gainRatios[laneIdx[it]] }
+            val bases = IntArray(laneIdx.size) { laneIdx[it] * floatsPerFrame }
+            val stripes = if (byBurst.size == 1) 4 else 1
+            repeat(stripes) { stripe ->
+                val y0 = stripe * nh / stripes; val y1 = (stripe + 1) * nh / stripes
+                futures += pool.submit<Double> {
+                    val cpuStart = System.nanoTime()
+                    check(NativeTensorPreprocessor.fillFusedBayerSrgbRowStripe(
+                        frameArrays, minOf(burstN, frames.size), f0.width, f0.height,
+                        f0.cfaPattern, f0.sensorOrientation, gains, bases, lut, input,
+                        imgsz, y0, y1))
+                    (System.nanoTime() - cpuStart) / 1e6
+                }
+            }
+        }
+        val cpuMs = futures.sumOf { it.get() }
+        input.rewind()
+        val nw = Math.round(orientedW * scale)
+        val mapping = TensorLetterbox(scale.toDouble(),
+            ((imgsz - nw) / 2f).toDouble(), ((imgsz - nh) / 2f).toDouble())
+        val end = System.nanoTime()
+        return Exp21TensorResult(DirectTensorBatch(input, List(count) { mapping }),
+            Exp21PathProfile("V2_explicit_burst_native", count,
+                (end - started) / 1e6, cpuMs, 0.0, (end - started) / 1e6))
+    }
+
+    /**
      * Continuous-v2 formation: one frame, explicit per-lane digital gain ratios, no grid
      * coupling. The ratios are relative to the frame AS CAPTURED (its physical ISO), so
      * the caller owns the base-rung bookkeeping. Same fused native fill as
