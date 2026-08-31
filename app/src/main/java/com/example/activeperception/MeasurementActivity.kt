@@ -97,7 +97,7 @@ class MeasurementActivity : AppCompatActivity() {
     private lateinit var driveStart: Button
     private lateinit var driveStatus: TextView
     private val prefs by lazy { getSharedPreferences("sos_ui", MODE_PRIVATE) }
-    private lateinit var drivePlaylistText: TextView
+    private lateinit var driveRowsView: LinearLayout
     private var driveMode = false
     private var driveRole = "A"
     private var driveShownAtMs = 0L
@@ -320,10 +320,15 @@ class MeasurementActivity : AppCompatActivity() {
         // second phone the role-swapped list so Prop-C is always running on one side.
         // KEYCODE_BACK (or Stop) cancels the playlist; block-boundary stops do not.
         intent.getStringExtra("playlist")?.let { pl ->
-            playlist = pl.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-            playlistBlockS = (intent.getStringExtra("block_s")?.toIntOrNull() ?: 120)
-                .coerceAtLeast(20)
-            if (playlist.isNotEmpty()) {
+            val tags = pl.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            if (tags.isNotEmpty()) {
+                // An adb playlist replaces the authored rows, taking the rest of each
+                // row's settings from whatever the screen currently holds.
+                val base = captureRow()
+                rows = tags.map { base.copy(method = it) }.toMutableList()
+                saveRows()
+                playlistBlockS = (intent.getStringExtra("block_s")?.toIntOrNull() ?: 120)
+                    .coerceAtLeast(20)
                 playlistActive = true
                 btnStart.postDelayed({ startPlaylistBlock() }, 1500)
             }
@@ -1015,26 +1020,74 @@ class MeasurementActivity : AppCompatActivity() {
         return true
     }
 
-    // ---------- drive mode ----------
+    // ---------- playlist screen (the default) ----------
 
-    /** Baselines that rotate opposite Prop-C. Role A runs Prop-C on even blocks, role B on
-     *  odd ones, so each baseline is paired with Prop-C once on EACH phone per cycle and
-     *  device bias cancels. Ten blocks x 120 s = a 20-minute cycle. */
-    private val driveBaselines = listOf("ae_cust", "ae_phone", "shin_nm", "physsweep", "nae")
-    private fun rolePlaylist(role: String): List<String> =
-        if (role == "B") driveBaselines.flatMap { listOf(it, "prop_c") }
-        else driveBaselines.flatMap { listOf("prop_c", it) }
+    /** One block of the experiment: a snapshot of the settings screen. Applying a row
+     *  restores those controls, so rows need no plumbing of their own — every run-start
+     *  path keeps reading the same views it always did. */
+    private data class PlRow(val method: String, val period: Int,
+                             val sessionIdx: Int, val fallbackIdx: Int) {
+        fun encode() = "$method|$period|$sessionIdx|$fallbackIdx"
+        companion object {
+            fun decode(s: String): PlRow? {
+                val p = s.split('|')
+                if (p.size < 4) return null
+                return PlRow(p[0], p[1].toIntOrNull() ?: 10,
+                    p[2].toIntOrNull() ?: 0, p[3].toIntOrNull() ?: 4)
+            }
+        }
+    }
 
-    /** Drive mode exists because the lab UI is unusable in a car: it replaces the controls
-     *  with arm's-length targets, remembers everything across launches (so the car-side
-     *  interaction is ONE tap), and reports block changes by vibration so the screen never
-     *  has to be looked at. Stop is a long-press — a brushed knee must not end a run. */
+    private val methodIds = listOf(
+        "fixed" to R.id.methodFixed,
+        "ae_phone" to R.id.methodAePhone,
+        "ae_cust" to R.id.methodAeCustom,
+        "aeq_phone" to R.id.methodAeQuantPhone,
+        "aeq_cust" to R.id.methodAeQuantCustom,
+        "proposed" to R.id.methodProposed,
+        "prop_c" to R.id.methodContinuous,
+        "physsweep" to R.id.methodPhysSweep,
+        "shin_nm" to R.id.methodShinNM,
+        "nae" to R.id.methodNeuralAe)
+    /** Indices, not resource ids: R.id values are not stable across builds. */
+    private val fallbackIds = listOf(R.id.fbEntropy, R.id.fbLaplacian, R.id.fbTenengrad,
+        R.id.fbCreteRoffet, R.id.fbSafeCell)
+    private val sessionShort = listOf("indoor", "day", "dim", "night")
+
+    private var rows: MutableList<PlRow> = mutableListOf()
+    /** Editor state: -1 appends a new row, >= 0 edits that row, -2 is tools-only
+     *  (diagnostics and Run now, nothing saved), -3 means the editor is closed. */
+    private var editingIndex = -3
+
+    /** Default rotation: Prop-C alternating with each baseline. Role B shifts the block
+     *  index by one, so two phones running the SAME list always have Prop-C on one side
+     *  and a baseline on the other, and every baseline is paired on both phones. */
+    private fun defaultRows(): MutableList<PlRow> =
+        listOf("ae_cust", "ae_phone", "shin_nm", "physsweep", "nae")
+            .flatMap { listOf("prop_c", it) }
+            .map { PlRow(it, 10, 0, 4) }
+            .toMutableList()
+
+    private fun loadRows() {
+        val raw2 = prefs.getString("rows", null)
+        rows = if (raw2.isNullOrBlank()) defaultRows()
+        else raw2.split(';').mapNotNull { PlRow.decode(it) }.toMutableList()
+        if (rows.isEmpty()) rows = defaultRows()
+    }
+
+    private fun saveRows() {
+        prefs.edit().putString("rows", rows.joinToString(";") { it.encode() }).apply()
+    }
+
+    /** Playlist is the home screen; the settings screen is only ever a row editor or a
+     *  tools panel, so it starts hidden. */
     private fun wireDriveMode() {
         drivePanel = findViewById(R.id.drivePanel)
         driveStart = findViewById(R.id.driveStart)
         driveStatus = findViewById(R.id.driveStatus)
-        // The lab controls carry the window insets; in drive mode they are hidden, so the
-        // panel takes over keeping its status line clear of the navigation bar.
+        driveRowsView = findViewById(R.id.driveRows)
+        // The settings screen carries the window insets; the playlist replaces it, so it
+        // takes over keeping its status line clear of the navigation bar.
         val dpBase = intArrayOf(drivePanel.paddingLeft, drivePanel.paddingTop,
             drivePanel.paddingRight, drivePanel.paddingBottom)
         ViewCompat.setOnApplyWindowInsetsListener(drivePanel) { v, insets ->
@@ -1044,7 +1097,9 @@ class MeasurementActivity : AppCompatActivity() {
             insets
         }
         driveRole = prefs.getString("role", "A") ?: "A"
-        sessionSpinner.setSelection(prefs.getInt("session_idx", 0))
+        driveFlip = prefs.getBoolean("flip", false)
+        playlistBlockS = prefs.getInt("block_s", 120)
+        loadRows()
         // Offload survives launches too: in the car there is no chance to retype a URL.
         prefs.getString("offload_url", null)?.let { offloadUrl.setText(it) }
         offloadCheck.isChecked = prefs.getBoolean("offload_on", false)
@@ -1052,21 +1107,16 @@ class MeasurementActivity : AppCompatActivity() {
             prefs.edit().putBoolean("offload_on", on)
                 .putString("offload_url", offloadUrl.text.toString()).apply()
         }
-        findViewById<android.widget.RadioButton>(
-            when (prefs.getInt("period", 10)) {
-                5 -> R.id.period5; 20 -> R.id.period20; else -> R.id.period10
-            }).isChecked = true
         findViewById<Button>(R.id.driveRoleA).setOnClickListener { setDriveRole("A") }
         findViewById<Button>(R.id.driveRoleB).setOnClickListener { setDriveRole("B") }
-        val sessBtns = listOf(R.id.driveSessIndoor to 0, R.id.driveSessDay to 1,
-            R.id.driveSessDim to 2, R.id.driveSessNight to 3)
-        for ((id, idx) in sessBtns) findViewById<Button>(id).setOnClickListener {
-            sessionSpinner.setSelection(idx)
-            prefs.edit().putInt("session_idx", idx).apply()
-            updateDriveUi()
-        }
-        drivePlaylistText = findViewById(R.id.drivePlaylist)
-        driveFlip = prefs.getBoolean("flip", false)
+        listOf(R.id.driveBlock60 to 60, R.id.driveBlock120 to 120, R.id.driveBlock180 to 180)
+            .forEach { (id, s) ->
+                findViewById<Button>(id).setOnClickListener {
+                    playlistBlockS = s
+                    prefs.edit().putInt("block_s", s).apply()
+                    updateDriveUi()
+                }
+            }
         findViewById<Button>(R.id.driveFlip).setOnClickListener {
             driveFlip = !driveFlip
             prefs.edit().putBoolean("flip", driveFlip).apply()
@@ -1074,10 +1124,16 @@ class MeasurementActivity : AppCompatActivity() {
             applyMountOffset()
             updateDriveUi()
         }
-        findViewById<Button>(R.id.driveToLab).setOnClickListener { setDriveMode(false) }
+        findViewById<Button>(R.id.driveToLab).setOnClickListener { openEditor(-2) }
+        findViewById<Button>(R.id.driveAddRow).setOnClickListener { openEditor(-1) }
+        findViewById<Button>(R.id.editorSave).setOnClickListener { saveEditorRow() }
+        findViewById<Button>(R.id.editorRunNow).setOnClickListener {
+            closeEditor(); btnStart.performClick()
+        }
+        findViewById<Button>(R.id.editorCancel).setOnClickListener { closeEditor() }
         driveStart.setOnClickListener {
-            // Entering drive mode reveals this button under the finger that was still on
-            // the DRIVE MODE control, so the first moments after the switch are deaf.
+            // Opening this screen can reveal the button under a finger still travelling
+            // from the control that opened it, so the first moments are deaf.
             if (SystemClock.elapsedRealtime() - driveShownAtMs < 700) return@setOnClickListener
             if (playlistActive || runActive) post("hold to stop")
             else startDrivePlaylist()
@@ -1086,17 +1142,8 @@ class MeasurementActivity : AppCompatActivity() {
             if (playlistActive || runActive) { vibrate(400); stopMeasurement() }
             true
         }
-        // A "Drive" entry lives in the lab controls; on the glass the touchpad profile owns
-        // the screen, so drive mode is phone-only.
-        if (!rayNeoTouchpad) {
-            val toDrive = Button(this).apply {
-                text = "DRIVE MODE"
-                textSize = 16f
-                setOnClickListener { setDriveMode(true) }
-            }
-            controlsInner.addView(toDrive, 0)
-            if (prefs.getBoolean("drive_mode", false)) setDriveMode(true) else updateDriveUi()
-        }
+        // The glass keeps its touchpad-driven simple UI; the playlist is a phone screen.
+        if (!rayNeoTouchpad) setDriveMode(true) else updateDriveUi()
     }
 
     private fun setDriveRole(role: String) {
@@ -1105,10 +1152,58 @@ class MeasurementActivity : AppCompatActivity() {
         updateDriveUi()
     }
 
+    /** [index]: -1 append, >= 0 edit that row, -2 tools only. */
+    private fun openEditor(index: Int) {
+        editingIndex = index
+        if (index >= 0) applyRow(rows[index])
+        findViewById<View>(R.id.editorBar).visibility = View.VISIBLE
+        findViewById<Button>(R.id.editorSave).visibility =
+            if (index == -2) View.GONE else View.VISIBLE
+        setDriveMode(false)
+        controlsScroll.scrollTo(0, 0)
+    }
+
+    private fun closeEditor() {
+        editingIndex = -3
+        findViewById<View>(R.id.editorBar).visibility = View.GONE
+        setDriveMode(true)
+    }
+
+    private fun saveEditorRow() {
+        val row = captureRow()
+        if (editingIndex >= 0) rows[editingIndex] = row else rows.add(row)
+        saveRows()
+        closeEditor()
+    }
+
+    /** Current settings-screen state as a row. */
+    private fun captureRow(): PlRow {
+        val method = methodIds.firstOrNull {
+            findViewById<android.widget.RadioButton>(it.second).isChecked
+        }?.first ?: "prop_c"
+        val period = when (periodGroup.checkedRadioButtonId) {
+            R.id.period10 -> 10; R.id.period20 -> 20; else -> 5
+        }
+        val fb = fallbackIds.indexOf(fallbackGroup.checkedRadioButtonId).coerceAtLeast(0)
+        return PlRow(method, period, sessionSpinner.selectedItemPosition, fb)
+    }
+
+    /** Restore a row into the settings screen — this is also how a block is launched. */
+    private fun applyRow(row: PlRow) {
+        methodIds.firstOrNull { it.first == row.method }?.let {
+            findViewById<android.widget.RadioButton>(it.second).isChecked = true
+        }
+        findViewById<android.widget.RadioButton>(when (row.period) {
+            5 -> R.id.period5; 20 -> R.id.period20; else -> R.id.period10
+        }).isChecked = true
+        sessionSpinner.setSelection(row.sessionIdx.coerceIn(0, 3))
+        findViewById<android.widget.RadioButton>(
+            fallbackIds[row.fallbackIdx.coerceIn(0, fallbackIds.size - 1)]).isChecked = true
+    }
+
     private fun setDriveMode(on: Boolean) {
         driveMode = on
         if (on) driveShownAtMs = SystemClock.elapsedRealtime()
-        prefs.edit().putBoolean("drive_mode", on).apply()
         drivePanel.visibility = if (on) View.VISIBLE else View.GONE
         controlsScroll.visibility = if (on) View.GONE else View.VISIBLE
         applyDriveOrientation()
@@ -1116,8 +1211,8 @@ class MeasurementActivity : AppCompatActivity() {
         updateDriveUi()
     }
 
-    /** Reverse portrait only while an inverted mount is declared, so the lab profile and
-     *  the glass are never affected. */
+    /** Reverse portrait only while an inverted mount is declared, so the settings screen
+     *  and the glass are never affected. */
     private fun applyDriveOrientation() {
         requestedOrientation = if (driveMode && driveFlip)
             android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
@@ -1130,31 +1225,42 @@ class MeasurementActivity : AppCompatActivity() {
         if (::raw.isInitialized) raw.mountOffsetDeg = mountOffsetDeg
     }
 
-    /** The whole rotation with the live block marked — before a start it previews the
-     *  block the wall clock would pick, so what is coming is readable at a glance. */
-    private fun renderPlaylistText() {
-        if (!::drivePlaylistText.isInitialized) return
-        val list = rolePlaylist(driveRole)
-        val blockS = if (playlistActive) playlistBlockS else 120
-        val now = System.currentTimeMillis()
-        val cur = ((now / 1000 / blockS) % list.size).toInt()
-        val left = (blockS * 1000L - now % (blockS * 1000L)) / 1000
-        val sb = StringBuilder("role $driveRole · ${blockS}s blocks · ${left}s to next\n")
-        list.forEachIndexed { i, cmd ->
-            sb.append(if (i == cur) "▶ " else "   ").append(cmd)
-            if (i == cur && playlistActive) sb.append("   (${left}s)")
-            sb.append('\n')
+    /** Block index for this phone: the wall clock picks it, role B shifts by one. */
+    private fun currentBlockIndex(now: Long = System.currentTimeMillis()): Int {
+        if (rows.isEmpty()) return 0
+        val off = if (driveRole == "B") 1 else 0
+        return (((now / 1000 / playlistBlockS) + off) % rows.size).toInt()
+    }
+
+    /** Rebuilds the row list: the live block is marked, tap edits, long-press deletes. */
+    private fun renderRows() {
+        if (!::driveRowsView.isInitialized) return
+        driveRowsView.removeAllViews()
+        val cur = currentBlockIndex()
+        val left = (playlistBlockS * 1000L -
+            System.currentTimeMillis() % (playlistBlockS * 1000L)) / 1000
+        rows.forEachIndexed { i, r ->
+            val live = i == cur
+            val tv = TextView(this).apply {
+                text = (if (live) "▶ " else "   ") +
+                    "${r.method}  ·  p${r.period}  ·  ${sessionShort[r.sessionIdx.coerceIn(0, 3)]}" +
+                    (if (live) "   (${left}s)" else "")
+                textSize = 16f
+                setTextColor(getColor(
+                    if (live) R.color.text_primary else R.color.text_readout))
+                typeface = android.graphics.Typeface.MONOSPACE
+                setPadding(4, 10, 4, 10)
+                setOnClickListener { openEditor(i) }
+                setOnLongClickListener {
+                    rows.removeAt(i); saveRows(); vibrate(60); updateDriveUi(); true
+                }
+            }
+            driveRowsView.addView(tv)
         }
-        drivePlaylistText.text = sb.toString().trimEnd()
     }
 
     private fun startDrivePlaylist() {
-        val period = when (periodGroup.checkedRadioButtonId) {
-            R.id.period10 -> 10; R.id.period20 -> 20; else -> 5
-        }
-        prefs.edit().putInt("period", period).apply()
-        playlist = rolePlaylist(driveRole)
-        playlistBlockS = 120
+        if (rows.isEmpty()) { post("playlist is empty — add a row"); return }
         playlistActive = true
         vibrate(120); playlistHandler.postDelayed({ vibrate(120) }, 220)
         startPlaylistBlock()
@@ -1167,11 +1273,12 @@ class MeasurementActivity : AppCompatActivity() {
         driveStart.text = if (running) "STOP\n(hold)" else "START"
         findViewById<Button>(R.id.driveRoleA).alpha = if (driveRole == "A") 1f else 0.35f
         findViewById<Button>(R.id.driveRoleB).alpha = if (driveRole == "B") 1f else 0.35f
-        val si = sessionSpinner.selectedItemPosition
-        listOf(R.id.driveSessIndoor, R.id.driveSessDay, R.id.driveSessDim, R.id.driveSessNight)
-            .forEachIndexed { i, id -> findViewById<Button>(id).alpha = if (i == si) 1f else 0.35f }
         findViewById<Button>(R.id.driveFlip).alpha = if (driveFlip) 1f else 0.35f
-        renderPlaylistText()
+        listOf(R.id.driveBlock60 to 60, R.id.driveBlock120 to 120, R.id.driveBlock180 to 180)
+            .forEach { (id, s) ->
+                findViewById<Button>(id).alpha = if (playlistBlockS == s) 1f else 0.35f
+            }
+        renderRows()
     }
 
     @Suppress("DEPRECATION")
@@ -1188,7 +1295,6 @@ class MeasurementActivity : AppCompatActivity() {
 
     // ---------- driving playlist ----------
 
-    private var playlist: List<String> = emptyList()
     private var playlistBlockS: Int = 120
     @Volatile private var playlistActive = false
     private val playlistHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -1228,12 +1334,17 @@ class MeasurementActivity : AppCompatActivity() {
             playlistHandler.postDelayed({ startPlaylistBlock() }, remain + 500)
             return
         }
-        val idx = ((now / 1000 / playlistBlockS) % playlist.size).toInt()
-        val cmd = playlist[idx]
-        post("[$driveRole] block $idx: $cmd (${remain / 1000}s)")
+        if (rows.isEmpty()) { playlistActive = false; post("playlist is empty"); return }
+        val idx = currentBlockIndex(now)
+        val row = rows[idx]
+        post("[$driveRole] block $idx: ${row.method} (${remain / 1000}s)")
         // One buzz per scheme change: the driver never needs to look at the screen.
         vibrate(150)
-        launchRunnerCommand(cmd)
+        // A row IS the settings screen's state, so launching a block is restoring it and
+        // pressing Start — every run-start path keeps reading the views it always did.
+        applyRow(row)
+        if (row.method == "collect_nae") findViewById<Button>(R.id.btnNaeCollect).performClick()
+        else btnStart.performClick()
         updateDriveUi()
         playlistHandler.postDelayed({
             if (playlistActive && runActive) stopMeasurement(userInitiated = false)

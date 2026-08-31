@@ -88,28 +88,26 @@
                     android:paddingRight="10dp" />
             </LinearLayout>
 
+            <!-- Block length is global: the wall-clock alignment that pairs two phones
+                 without communication only works if both use the same period. -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:layout_marginTop="6dp">
 
-                <Button android:id="@+id/driveSessIndoor"
+                <Button android:id="@+id/driveBlock60"
                     android:layout_width="0dp" android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:text="Indoor" android:textSize="13sp" />
-                <Button android:id="@+id/driveSessDay"
+                    android:text="60s" android:textSize="13sp" />
+                <Button android:id="@+id/driveBlock120"
                     android:layout_width="0dp" android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:text="Day" android:textSize="13sp" />
-                <Button android:id="@+id/driveSessDim"
+                    android:text="120s" android:textSize="13sp" />
+                <Button android:id="@+id/driveBlock180"
                     android:layout_width="0dp" android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:text="Dim" android:textSize="13sp" />
-                <Button android:id="@+id/driveSessNight"
-                    android:layout_width="0dp" android:layout_weight="1"
-                    android:layout_height="wrap_content"
-                    android:text="Night" android:textSize="13sp" />
+                    android:text="180s" android:textSize="13sp" />
             </LinearLayout>
 
             <Button android:id="@+id/driveStart"
@@ -120,18 +118,25 @@
                 android:textSize="30sp"
                 android:textStyle="bold" />
 
-            <!-- The rotation this phone will walk, with the live block marked, so the
-                 upcoming scheme is readable at a glance before and during a drive. -->
-            <TextView android:id="@+id/drivePlaylist"
+            <!-- The rotation this phone will walk, with the live block marked. Rows are
+                 authored here: tap one to edit it, long-press to delete. -->
+            <ScrollView
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
-                android:layout_marginTop="8dp"
-                android:text=""
-                android:textColor="@color/text_readout"
-                android:fontFamily="monospace"
-                android:textSize="15sp"
-                android:lineSpacingMultiplier="1.15" />
+                android:layout_marginTop="8dp">
+
+                <LinearLayout android:id="@+id/driveRows"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </ScrollView>
+
+            <Button android:id="@+id/driveAddRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="+ ADD ROW"
+                android:textSize="15sp" />
 
             <TextView android:id="@+id/driveStatus"
                 android:layout_width="match_parent"
@@ -159,6 +164,35 @@
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:padding="8dp">
+
+            <!-- Editor bar: these controls double as the playlist row editor, so entering
+                 from the playlist shows save/run/cancel above them. -->
+            <LinearLayout
+                android:id="@+id/editorBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:visibility="gone">
+
+                <Button android:id="@+id/editorSave"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="SAVE ROW" android:textSize="13sp"
+                    android:minWidth="0dp" android:paddingLeft="4dp"
+                    android:paddingRight="4dp" />
+                <Button android:id="@+id/editorRunNow"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="RUN NOW" android:textSize="13sp"
+                    android:minWidth="0dp" android:paddingLeft="4dp"
+                    android:paddingRight="4dp" />
+                <Button android:id="@+id/editorCancel"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="CANCEL" android:textSize="13sp"
+                    android:minWidth="0dp" android:paddingLeft="4dp"
+                    android:paddingRight="4dp" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/touchpadHelp"
