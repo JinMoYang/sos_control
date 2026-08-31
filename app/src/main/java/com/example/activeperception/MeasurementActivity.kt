@@ -1130,6 +1130,7 @@ class MeasurementActivity : AppCompatActivity() {
         rows = if (raw2.isNullOrBlank()) defaultRows()
         else raw2.split(';').mapNotNull { PlRow.decode(it) }.toMutableList()
         if (rows.isEmpty()) rows = defaultRows()
+        normalizeRows()
     }
 
     private fun saveRows() {
@@ -1249,8 +1250,18 @@ class MeasurementActivity : AppCompatActivity() {
     private fun saveEditorRow() {
         val row = captureRow()
         if (editingIndex >= 0) rows[editingIndex] = row else rows.add(row)
+        normalizeRows()
         saveRows()
         closeEditor()
+    }
+
+    /** Once rows are prerequisites, not cycle members, so they are kept at the front —
+     *  otherwise their position would claim an order the run does not follow. With this,
+     *  stored order == shown order == run order. */
+    private fun normalizeRows() {
+        val once = rows.filter { isOnce(it.method) }
+        val rest = rows.filter { !isOnce(it.method) }
+        rows = (once + rest).toMutableList()
     }
 
     /** Current settings-screen state as a row. */
@@ -1358,7 +1369,12 @@ class MeasurementActivity : AppCompatActivity() {
     /** Long-press menu: the plan is edited in place instead of only appended to. Moves
      *  step over the hidden reference row so the list behaves as it looks. */
     private fun showRowMenu(i: Int) {
-        val visible = rows.indices.filter { !isProp(rows[it].method) }
+        // Moves stay within a kind: a once row cannot sink into the cycle and a cycle row
+        // cannot climb above the prerequisites, which is what keeps position truthful.
+        val kindOnce = isOnce(rows[i].method)
+        val visible = rows.indices.filter {
+            !isProp(rows[it].method) && isOnce(rows[it].method) == kindOnce
+        }
         val p = visible.indexOf(i)
         val items = mutableListOf<String>()
         val acts = mutableListOf<() -> Unit>()
@@ -1395,8 +1411,10 @@ class MeasurementActivity : AppCompatActivity() {
         val cap = findViewById<TextView>(R.id.driveCaption)
         if (nb == 0) { cap.text = "no rotating rows - add one"; return }
         val cycleMin = 2 * nb * playlistBlockS / 60.0
+        // The list fixes the cycle ORDER; which row a drive starts on is the wall clock's
+        // call, because that is what keeps the two phones paired.
         cap.text = "cycle " + (2 * nb) + " blocks = " + "%.0f".format(cycleMin) +
-            " min  |  each row 2x" + playlistBlockS + "s per cycle"
+            " min  |  each row 2x" + playlistBlockS + "s  |  clock picks the entry point"
     }
 
     private fun startDrivePlaylist() {
