@@ -3563,7 +3563,7 @@ class MeasurementController(
                 .put("shutter_rungs_us", JSONArray(v2ShutterRungsUs.toList())))
         logger.csv("v2diag", listOf("kind", "gi", "sj", "nominal_iso", "iso_req",
             "iso_applied", "exp_req_us", "exp_applied_us", "frame_duration_ns",
-            "n_frames", "ok"))
+            "n_frames", "ok", "apply_delay_frames", "wall_ms"))
         raw.configureDecodeThreads(4)
         raw.startFastCapture()
         try {
@@ -3571,24 +3571,32 @@ class MeasurementController(
                 if (!running) return
                 val rung = v2GainRungs[gi]; val phys = minOf(rung, analogCeil)
                 val exp = v2ShutterRungsUs[sj]
+                val t0 = now()
                 val got = runCatching { raw.captureFast(exp, phys, 1) }.getOrNull()
+                val wall = ms(t0)
                 val m = raw.lastMeta.firstOrNull()
                 logger.row("v2diag", listOf("single", gi, sj, rung, phys,
                     m?.appliedIso ?: -1, exp, m?.appliedExpUs ?: -1,
                     m?.frameDurationNs ?: -1, got?.size ?: 0,
-                    if (!got.isNullOrEmpty()) 1 else 0))
+                    if (!got.isNullOrEmpty()) 1 else 0,
+                    m?.applyDelayFrames ?: raw.lastApplyDelayFrames ?: -1,
+                    "%.1f".format(wall)))
                 onStatus("v2diag g$gi s$sj: iso $phys -> ${m?.appliedIso}  " +
-                    "exp $exp -> ${m?.appliedExpUs}us")
+                    "exp $exp -> ${m?.appliedExpUs}us  delay=${m?.applyDelayFrames}")
             }
             for (sj in v2ShutterRungsUs.indices) {
                 if (!running) return
                 val exp = v2ShutterRungsUs[sj]
+                val t0 = now()
                 val got = runCatching { raw.captureFast(exp, 400, 4) }.getOrNull()
+                val wall = ms(t0)
                 val m = raw.lastMeta.firstOrNull()
                 logger.row("v2diag", listOf("burst4", -1, sj, 400, 400,
                     m?.appliedIso ?: -1, exp, m?.appliedExpUs ?: -1,
                     m?.frameDurationNs ?: -1, got?.size ?: 0,
-                    if (got != null && got.size == 4) 1 else 0))
+                    if (got != null && got.size == 4) 1 else 0,
+                    m?.applyDelayFrames ?: raw.lastApplyDelayFrames ?: -1,
+                    "%.1f".format(wall)))
                 onStatus("v2diag burst4 s$sj: ${got?.size ?: 0}/4 frames")
             }
             onStatus("v2 lattice diag done")

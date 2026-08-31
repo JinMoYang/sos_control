@@ -265,6 +265,12 @@ class MeasurementActivity : AppCompatActivity() {
                 start("v2_diag") { mc!!.runV2LatticeDiag(::post) }
             else start("iso_diag") { mc!!.runIsoDiag(onStatus = ::post) }
         }
+        // Headless hook for adb-driven devices whose display sleeps when not worn (the
+        // glass): `--ez v2_diag true --ez autorun true` presses IsoDiag after layout.
+        if (intent.getBooleanExtra("autorun", false)) {
+            findViewById<Button>(R.id.btnIsoDiag).postDelayed(
+                { findViewById<Button>(R.id.btnIsoDiag).performClick() }, 1500)
+        }
         findViewById<Button>(R.id.btnExp21).setOnClickListener {
             start("exp2_1") { mc!!.runExp21DirectTensor(::post) }
         }
