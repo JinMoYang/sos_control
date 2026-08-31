@@ -529,9 +529,14 @@ class MeasurementActivity : AppCompatActivity() {
      *  detects anything. */
     private fun collectNaeData() {
         val already = NaeDataset.count(naeDatasetFile())
-        start("nae_collect") {
+        start(if (rayNeoTouchpad) "nae_collect" else "nae_collect_v2") {
             post("NAE collect: pool has $already samples — collecting…")
-            val added = mc!!.runNaeCollect(naeDatasetFile(), NAE_TARGET_SAMPLES, NAE_MAX_FRAMES,
+            // Phones collect on the v2 lattice (physical 15-capture surface); the glass
+            // keeps the v1 single-burst grid collector.
+            val added = if (rayNeoTouchpad)
+                mc!!.runNaeCollect(naeDatasetFile(), NAE_TARGET_SAMPLES, NAE_MAX_FRAMES,
+                    NAE_CELLS_PER_STEP, ::post, ::onFrameWithOffload)
+            else mc!!.runNaeCollectV2(naeDatasetFile(), NAE_TARGET_SAMPLES, NAE_MAX_FRAMES,
                 NAE_CELLS_PER_STEP, ::post, ::onFrameWithOffload)
             val total = NaeDataset.count(naeDatasetFile())
             post(if (total >= NAE_MIN_TRAIN)
@@ -598,20 +603,35 @@ class MeasurementActivity : AppCompatActivity() {
                 return
             }
             R.id.methodPhysSweep -> {
-                val n = grid.nGain * grid.nShutter
-                start("physsweep_full_h$n") {
-                    mc!!.runPhysSweep(true, n, NO_FRAME_CAP, ::post, ::onFrameWithOffload)
+                // Phones search the v2 lattice — the same 5x5 space Prop-C lives on —
+                // so the comparison isolates the method, not the search space. The glass
+                // keeps its device grid.
+                val v2 = !rayNeoTouchpad
+                val n = if (v2) 25 else grid.nGain * grid.nShutter
+                start(if (v2) "physsweep_v2_full_h$n" else "physsweep_full_h$n") {
+                    mc!!.runPhysSweep(true, n, NO_FRAME_CAP, ::post, v2 = v2,
+                        onFrame = ::onFrameWithOffload)
                 }
                 return
             }
             R.id.methodShinNM -> {
-                start("shin_nm") { mc!!.runShinNM("restart_int", NO_FRAME_CAP, ::post, ::onFrameWithOffload) }
+                val v2 = !rayNeoTouchpad
+                start(if (v2) "shin_nm_v2" else "shin_nm") {
+                    mc!!.runShinNM("restart_int", NO_FRAME_CAP, ::post, v2 = v2,
+                        onFrame = ::onFrameWithOffload)
+                }
                 return
             }
             R.id.methodNeuralAe -> {
                 val w = loadNaeWeights()
                 if (w == null) post("NAE weights missing — Train NAE below, or push nae_hist_scalar_3x3.bin to the app files dir")
-                else start("nae") { mc!!.runNeuralAe(w, NO_FRAME_CAP, ::post, ::onFrameWithOffload) }
+                else {
+                    val v2 = !rayNeoTouchpad
+                    start(if (v2) "nae_v2" else "nae") {
+                        mc!!.runNeuralAe(w, NO_FRAME_CAP, ::post, v2 = v2,
+                            onFrame = ::onFrameWithOffload)
+                    }
+                }
                 return
             }
             R.id.methodProposed -> {
