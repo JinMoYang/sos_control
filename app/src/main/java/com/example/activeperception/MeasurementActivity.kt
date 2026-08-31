@@ -211,7 +211,14 @@ class MeasurementActivity : AppCompatActivity() {
         var syncingMethodRows = false
         fun applyMethodVisibility(id: Int) {
             cellGridWrap.visibility = if (id == R.id.methodFixed) View.VISIBLE else View.GONE
-            proposedSettings.visibility = if (id == R.id.methodProposed) View.VISIBLE else View.GONE
+            // Prop-C shares the period row; its fallback row is grayed because v2 holds
+            // on all-zero frames instead of running a fallback metric.
+            val proposedFamily = id == R.id.methodProposed || id == R.id.methodContinuous
+            proposedSettings.visibility = if (proposedFamily) View.VISIBLE else View.GONE
+            val fallbackOn = id == R.id.methodProposed
+            for (i in 0 until fallbackGroup.childCount)
+                fallbackGroup.getChildAt(i).isEnabled = fallbackOn
+            fallbackGroup.alpha = if (fallbackOn) 1f else 0.4f
         }
         methodGroup.setOnCheckedChangeListener { _, id ->
             if (id != -1 && !syncingMethodRows) {
