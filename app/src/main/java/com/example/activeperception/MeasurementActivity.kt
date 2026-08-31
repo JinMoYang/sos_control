@@ -225,6 +225,11 @@ class MeasurementActivity : AppCompatActivity() {
         cellGridWrap.visibility = View.GONE
         proposedSettings.visibility = View.VISIBLE
 
+        // v2 (Prop-C) has no boost concept, and the v1 arms must keep the 2x default their
+        // collected runs used — so the row is frozen rather than removed: a stray tap can
+        // no longer fork comparability mid-experiment.
+        for (i in 0 until boostGroup.childCount) boostGroup.getChildAt(i).isEnabled = false
+        boostGroup.alpha = 0.4f
         // Grid is mutated in place; the rebuild refreshes the effective-ISO labels.
         boostGroup.setOnCheckedChangeListener { _, id ->
             grid.digitalBoost = boostFromCheckedId(id)
