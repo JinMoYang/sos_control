@@ -291,31 +291,29 @@ class MeasurementActivity : AppCompatActivity() {
         // directly: `--es run <method>` with optional `--es period 5|10|20`. Methods:
         // fixed | ae_phone | ae_cust | aeq_phone | aeq_cust | proposed | prop_c |
         // physsweep | shin_nm | nae | collect_nae. Stop a run with KEYCODE_BACK.
+        intent.getStringExtra("period")?.let { p ->
+            val pid = when (p) {
+                "10" -> R.id.period10; "20" -> R.id.period20; else -> R.id.period5
+            }
+            findViewById<android.widget.RadioButton>(pid).isChecked = true
+        }
         intent.getStringExtra("run")?.let { cmd ->
-            intent.getStringExtra("period")?.let { p ->
-                val pid = when (p) {
-                    "10" -> R.id.period10; "20" -> R.id.period20; else -> R.id.period5
-                }
-                findViewById<android.widget.RadioButton>(pid).isChecked = true
+            btnStart.postDelayed({ launchRunnerCommand(cmd) }, 1500)
+        }
+        // Two-phone driving playlist: `--es playlist "prop_c,ae_cust,..."` with optional
+        // `--es block_s 120`. The block INDEX derives from the wall clock
+        // (floor(epoch/block_s) mod len), so two phones stay aligned with no
+        // communication, and a rebooted phone rejoins at the right position. Give the
+        // second phone the role-swapped list so Prop-C is always running on one side.
+        // KEYCODE_BACK (or Stop) cancels the playlist; block-boundary stops do not.
+        intent.getStringExtra("playlist")?.let { pl ->
+            playlist = pl.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+            playlistBlockS = (intent.getStringExtra("block_s")?.toIntOrNull() ?: 120)
+                .coerceAtLeast(20)
+            if (playlist.isNotEmpty()) {
+                playlistActive = true
+                btnStart.postDelayed({ startPlaylistBlock() }, 1500)
             }
-            val rid = when (cmd) {
-                "fixed" -> R.id.methodFixed
-                "ae_phone" -> R.id.methodAePhone
-                "ae_cust" -> R.id.methodAeCustom
-                "aeq_phone" -> R.id.methodAeQuantPhone
-                "aeq_cust" -> R.id.methodAeQuantCustom
-                "proposed" -> R.id.methodProposed
-                "prop_c" -> R.id.methodContinuous
-                "physsweep" -> R.id.methodPhysSweep
-                "shin_nm" -> R.id.methodShinNM
-                "nae" -> R.id.methodNeuralAe
-                else -> 0
-            }
-            if (rid != 0) findViewById<android.widget.RadioButton>(rid).isChecked = true
-            btnStart.postDelayed({
-                if (cmd == "collect_nae") findViewById<Button>(R.id.btnNaeCollect).performClick()
-                else btnStart.performClick()
-            }, 1500)
         }
         findViewById<Button>(R.id.btnExp21).setOnClickListener {
             start("exp2_1") { mc!!.runExp21DirectTensor(::post) }
@@ -1001,7 +999,63 @@ class MeasurementActivity : AppCompatActivity() {
         return true
     }
 
-    private fun stopMeasurement() {
+    // ---------- driving playlist ----------
+
+    private var playlist: List<String> = emptyList()
+    private var playlistBlockS: Int = 120
+    @Volatile private var playlistActive = false
+    private val playlistHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** Programmatic equivalent of picking a method radio and pressing Start. */
+    private fun launchRunnerCommand(cmd: String) {
+        val rid = when (cmd) {
+            "fixed" -> R.id.methodFixed
+            "ae_phone" -> R.id.methodAePhone
+            "ae_cust" -> R.id.methodAeCustom
+            "aeq_phone" -> R.id.methodAeQuantPhone
+            "aeq_cust" -> R.id.methodAeQuantCustom
+            "proposed" -> R.id.methodProposed
+            "prop_c" -> R.id.methodContinuous
+            "physsweep" -> R.id.methodPhysSweep
+            "shin_nm" -> R.id.methodShinNM
+            "nae" -> R.id.methodNeuralAe
+            else -> 0
+        }
+        if (rid != 0) findViewById<android.widget.RadioButton>(rid).isChecked = true
+        if (cmd == "collect_nae") findViewById<Button>(R.id.btnNaeCollect).performClick()
+        else btnStart.performClick()
+    }
+
+    /** Starts the scheme the wall clock says this block belongs to, and schedules the
+     *  boundary stop. Near-boundary launches wait for the next block instead of running
+     *  a stub. Pairing needs no bookkeeping: block index is floor(run start epoch /
+     *  block_s) offline. */
+    private fun startPlaylistBlock() {
+        if (!playlistActive) return
+        if (runActive) { playlistHandler.postDelayed({ startPlaylistBlock() }, 1000); return }
+        val blockMs = playlistBlockS * 1000L
+        val now = System.currentTimeMillis()
+        val remain = blockMs - now % blockMs
+        if (remain < 15_000L) {
+            post("playlist: ${remain / 1000}s to the boundary — waiting")
+            playlistHandler.postDelayed({ startPlaylistBlock() }, remain + 500)
+            return
+        }
+        val idx = ((now / 1000 / playlistBlockS) % playlist.size).toInt()
+        val cmd = playlist[idx]
+        post("playlist block $idx: $cmd (${remain / 1000}s left)")
+        launchRunnerCommand(cmd)
+        playlistHandler.postDelayed({
+            if (playlistActive && runActive) stopMeasurement(userInitiated = false)
+        }, remain)
+    }
+
+    private fun stopMeasurement(userInitiated: Boolean = true) {
+        if (userInitiated && playlistActive) {
+            playlistActive = false
+            playlistHandler.removeCallbacksAndMessages(null)
+            post("playlist cancelled")
+        }
         if (cancelRotationSession()) {
             runOnUiThread { overlay.clear(); cellText.text = "—" }
             return
@@ -1333,6 +1387,11 @@ class MeasurementActivity : AppCompatActivity() {
                 post("error: ${e.message}")
             } finally {
                 runActive = false
+                // Playlist continuation: the next block starts once this run's worker has
+                // fully unwound (camera and GPU stay open, so the gap is a second or two).
+                if (playlistActive) runOnUiThread {
+                    playlistHandler.postDelayed({ startPlaylistBlock() }, 1500)
+                }
             }
         }
     }
