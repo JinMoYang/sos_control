@@ -107,12 +107,10 @@ class MeasurementActivity : AppCompatActivity() {
      *  degrees to the formation path, so both see an upright image. */
     private var driveFlip = false
     @Volatile private var mountOffsetDeg = 0
-    /** Optional head of the playlist: collect NAE training data and train on it before the
-     *  rotation starts. It advances on COMPLETION, not on a block boundary — and that does
-     *  not break the pairing, because the rotation is indexed by the wall clock, so a phone
-     *  joins whatever block is live when its prep finishes. */
-    private var naePrepEnabled = false
-    /** 0 idle, 1 collecting, 2 training. */
+    /** A "once" row (NAE collect+train) advances on COMPLETION, not on a block boundary,
+     *  and that does not break the pairing: the rotation is indexed by the wall clock, so
+     *  a phone joins whatever block is live when its prep finishes.
+     *  0 idle, 1 collecting, 2 training. */
     @Volatile private var prepStage = 0
     private var prepDone = false
     private lateinit var offloadCheck: CheckBox
@@ -1058,6 +1056,14 @@ class MeasurementActivity : AppCompatActivity() {
         if (r.method == "prop_c" || r.method == "proposed") "${r.method} · p${r.period}"
         else r.method
 
+    /** Rows come in three kinds, and every one of them is authored the same way — pick a
+     *  method in the editor and save. The kind follows from the method:
+     *   - reference: the Proposed family, the constant partner of every rotating row;
+     *   - once:      preparation (NAE collect+train) that runs at START and advances on
+     *                completion instead of on a block boundary;
+     *   - rotating:  everything else, one per block, paired against the reference. */
+    private fun isOnce(m: String) = m == "nae_prep"
+
     private val methodIds = listOf(
         "fixed" to R.id.methodFixed,
         "ae_phone" to R.id.methodAePhone,
@@ -1068,7 +1074,8 @@ class MeasurementActivity : AppCompatActivity() {
         "prop_c" to R.id.methodContinuous,
         "physsweep" to R.id.methodPhysSweep,
         "shin_nm" to R.id.methodShinNM,
-        "nae" to R.id.methodNeuralAe)
+        "nae" to R.id.methodNeuralAe,
+        "nae_prep" to R.id.methodNaePrep)
     /** Indices, not resource ids: R.id values are not stable across builds. */
     private val fallbackIds = listOf(R.id.fbEntropy, R.id.fbLaplacian, R.id.fbTenengrad,
         R.id.fbCreteRoffet, R.id.fbSafeCell)
@@ -1088,7 +1095,8 @@ class MeasurementActivity : AppCompatActivity() {
             .toMutableList()
 
     private fun isProp(m: String) = m == "prop_c" || m == "proposed"
-    private fun baselineRows() = rows.filter { !isProp(it.method) }
+    private fun baselineRows() = rows.filter { !isProp(it.method) && !isOnce(it.method) }
+    private fun onceRows() = rows.filter { isOnce(it.method) }
     private fun propRow() = rows.firstOrNull { isProp(it.method) } ?: PlRow("prop_c", 10, 4)
 
     /** LEFT takes Prop-C on odd blocks, RIGHT on even ones, so exactly one phone is on
@@ -1179,12 +1187,9 @@ class MeasurementActivity : AppCompatActivity() {
                 updateDriveUi()
             }
         }
-        naePrepEnabled = prefs.getBoolean("nae_prep", false)
-        findViewById<Button>(R.id.driveNaePrep).setOnClickListener {
-            naePrepEnabled = !naePrepEnabled
-            prepDone = false          // re-arming asks for a fresh collect
-            prefs.edit().putBoolean("nae_prep", naePrepEnabled).apply()
-            updateDriveUi()
+        findViewById<TextView>(R.id.driveReference).setOnClickListener {
+            val i = rows.indexOfFirst { r -> isProp(r.method) }
+            if (i >= 0) openEditor(i) else openEditor(-1)
         }
         findViewById<Button>(R.id.driveFlip).setOnClickListener {
             driveFlip = !driveFlip
@@ -1316,16 +1321,29 @@ class MeasurementActivity : AppCompatActivity() {
         val liveIdx = blockRow(k).second
         val left = (playlistBlockS * 1000L -
             System.currentTimeMillis() % (playlistBlockS * 1000L)) / 1000
-        rows.forEachIndexed { i, r ->
+        // Once rows head the list because that is when they run, whatever order they were
+        // added in; the reference is shown on its own line above, not as a peer.
+        val order = rows.indices.sortedBy { if (isOnce(rows[it].method)) 0 else 1 }
+        order.forEach { i ->
+            val r = rows[i]
+            if (isProp(r.method)) return@forEach
             val live = i == liveIdx
             val tv = TextView(this).apply {
                 // Only the live row carries state - what it faces on the other phone and
                 // the seconds left - so the rest stays a plain list.
-                text = (if (live) "> " else "   ") + rowLabel(r) +
-                    (if (live) "   <-> " + rowLabel(otherRow(k)) + "   (" + left + "s)" else "")
+                text = (if (live || (isOnce(r.method) && prepStage > 0)) "> " else "   ") +
+                    rowLabel(r) + when {
+                        isOnce(r.method) && prepStage == 1 -> "   (collecting…)"
+                        isOnce(r.method) && prepStage == 2 -> "   (training…)"
+                        isOnce(r.method) && prepDone -> "   (done)"
+                        isOnce(r.method) -> "   (once, at START)"
+                        live -> "   <-> " + rowLabel(otherRow(k)) + "   (" + left + "s)"
+                        else -> ""
+                    }
                 textSize = 16f
                 setTextColor(getColor(
-                    if (live) R.color.text_primary else R.color.text_readout))
+                    if (live || (isOnce(r.method) && prepStage > 0)) R.color.text_primary
+                    else R.color.text_readout))
                 typeface = android.graphics.Typeface.MONOSPACE
                 setPadding(4, 10, 4, 10)
                 setOnClickListener { openEditor(i) }
@@ -1341,19 +1359,16 @@ class MeasurementActivity : AppCompatActivity() {
      *  takes (the repetitions a drive yields are its duration divided by this), and
      *  whether prep runs first. Keeping it out of the list keeps the list a list. */
     private fun renderCaption() {
+        val ref = findViewById<TextView>(R.id.driveReference)
+        val refRow = rows.firstOrNull { isProp(it.method) }
+        ref.text = if (refRow == null) "reference: none - add a Prop-C row"
+            else "reference  " + rowLabel(refRow) + "   (opposite every row)"
         val nb = baselineRows().size
         val cap = findViewById<TextView>(R.id.driveCaption)
-        if (nb == 0) { cap.text = "no baselines - add a row"; return }
+        if (nb == 0) { cap.text = "no rotating rows - add one"; return }
         val cycleMin = 2 * nb * playlistBlockS / 60.0
-        val prep = when {
-            !naePrepEnabled -> ""
-            prepStage == 1 -> "  |  NAE prep: collecting"
-            prepStage == 2 -> "  |  NAE prep: training"
-            prepDone -> "  |  NAE prep done"
-            else -> "  |  NAE prep first"
-        }
-        cap.text = "prop_c every other block  |  cycle " + (2 * nb) + " blocks = " +
-            "%.0f".format(cycleMin) + " min" + prep
+        cap.text = "cycle " + (2 * nb) + " blocks = " + "%.0f".format(cycleMin) +
+            " min  |  each row 2x" + playlistBlockS + "s per cycle"
     }
 
     private fun startDrivePlaylist() {
@@ -1361,9 +1376,9 @@ class MeasurementActivity : AppCompatActivity() {
         commitBlockSec()
         playlistActive = true
         vibrate(120); playlistHandler.postDelayed({ vibrate(120) }, 220)
-        if (naePrepEnabled && !prepDone) {
-            // No boundary stop is scheduled for prep: the collector ends itself at its
-            // sample target, then training runs, then the rotation is joined.
+        if (onceRows().isNotEmpty() && !prepDone) {
+            // No boundary stop is scheduled for a once row: the collector ends itself at
+            // its sample target, then training runs, then the rotation is joined.
             prepStage = 1
             post("NAE prep: collecting…")
             updateDriveUi()
@@ -1381,7 +1396,6 @@ class MeasurementActivity : AppCompatActivity() {
         findViewById<Button>(R.id.driveRoleA).text =
             if (driveRole == "L") "LEFT · prop odd" else "RIGHT · prop even"
         findViewById<Button>(R.id.driveFlip).alpha = if (driveFlip) 1f else 0.35f
-        findViewById<Button>(R.id.driveNaePrep).alpha = if (naePrepEnabled) 1f else 0.35f
         val si = sessionSpinner.selectedItemPosition
         listOf(R.id.driveSessIndoor, R.id.driveSessDay, R.id.driveSessDim, R.id.driveSessNight)
             .forEachIndexed { i, id -> findViewById<Button>(id).alpha = if (i == si) 1f else 0.35f }

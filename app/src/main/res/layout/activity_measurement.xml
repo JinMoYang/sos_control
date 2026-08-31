@@ -145,13 +145,18 @@
                     android:text="s"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp" />
-                <Button android:id="@+id/driveNaePrep"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="NAE prep" android:textSize="12sp"
-                    android:minWidth="0dp" android:paddingLeft="10dp"
-                    android:paddingRight="10dp" />
             </LinearLayout>
+
+            <!-- The constant partner of every rotating row. It is not a peer in the list,
+                 so it gets its own line; tapping it edits its settings. -->
+            <TextView android:id="@+id/driveReference"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text=""
+                android:textColor="@color/text_primary"
+                android:fontFamily="monospace"
+                android:textSize="15sp" />
 
             <!-- One quiet caption for the structure (who runs opposite what, how long a
                  cycle takes), so the row list stays a plain list. -->
@@ -296,6 +301,10 @@
                     style="@style/Option.Narrow" android:text="AEq-Phone" />
                 <RadioButton android:id="@+id/methodAeQuantCustom"
                     style="@style/Option.Narrow" android:text="AEq-Cust" />
+                <!-- A playlist row like any other, but one that runs ONCE at START and
+                     advances when it finishes rather than on a block boundary. -->
+                <RadioButton android:id="@+id/methodNaePrep"
+                    style="@style/Option.Narrow" android:text="NAEprep" />
             </RadioGroup>
 
             <RadioGroup
