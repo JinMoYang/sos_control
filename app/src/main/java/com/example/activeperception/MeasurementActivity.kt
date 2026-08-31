@@ -59,9 +59,10 @@ class MeasurementActivity : AppCompatActivity() {
         /** Run modes have no frame cap: field passes follow a lap protocol the operator
          *  ends with Stop. Storage stays modest (~85 KB per frame, img/ JPEGs only). */
         private const val NO_FRAME_CAP = Int.MAX_VALUE
-        /** Neural-AE collection budget — see [trainNaeFromRecordings]. 3 cells x ~100
-         *  probe steps; the frame cap bounds a scene that yields nothing. */
-        private const val NAE_CELLS_PER_STEP = 3
+        /** Neural-AE collection budget. The v2 collector pays 25 physical captures per
+         *  step for the surface, so harvesting is the cheap part — 6 cells/step reaches
+         *  300 samples in ~50 steps (~2.5 min) instead of 100. */
+        private const val NAE_CELLS_PER_STEP = 6
         private const val NAE_TARGET_SAMPLES = 300
         private const val NAE_MAX_FRAMES = 300
         /** Below this the pool is too small to hold out a meaningful validation split. */
@@ -546,36 +547,60 @@ class MeasurementActivity : AppCompatActivity() {
         }
     }
 
-    /** Trains on the pool and writes the weights where [loadNaeWeights] looks first.
-     *  No camera involved; the GPU worker just serializes it against runs, and [runActive]
-     *  keeps Start/Collect refusals honest while an epoch loop is busy.
-     *
-     *  Incremental-by-collection semantics: a successful training ARCHIVES the pool
-     *  (renamed nae_dataset_trained_<ts>.bin), so the next Train sees only samples
-     *  collected after this one. Nothing is deleted — archives stay in the files dir. */
+    private fun naeArchiveFiles(): List<java.io.File> =
+        (getExternalFilesDir(null)?.listFiles { f ->
+            f.name.startsWith("nae_dataset_trained_") && f.name.endsWith(".bin")
+        } ?: emptyArray()).sortedBy { it.name }
+
+    /** Train NAE asks WHAT to train on: only the samples collected since the last
+     *  training (per-condition models, e.g. normal-only) or everything ever collected
+     *  (the pooled model) — the two arms of the in-sample / OOD protocol, selectable at
+     *  the button with no file surgery. Every successful training archives the current
+     *  pool and saves a timestamped weights copy, so earlier models stay recoverable. */
     private fun trainNaePool() {
         if (runActive) { post("busy — stop first"); return }
-        val n = NaeDataset.count(naeDatasetFile())
-        if (n < NAE_MIN_TRAIN) {
-            post("NAE train: pool has $n new samples since the last training, " +
+        val newN = NaeDataset.count(naeDatasetFile())
+        val archN = naeArchiveFiles().sumOf { NaeDataset.count(it) }
+        if (newN + archN < NAE_MIN_TRAIN) {
+            post("NAE train: $newN new + $archN archived samples, " +
                 "need $NAE_MIN_TRAIN — Collect first")
             return
         }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Train NAE")
+            .setMessage("New since last training: $newN\nCumulative (incl. archives): ${newN + archN}")
+            .setPositiveButton("New only ($newN)") { _, _ -> doTrainNae(useAll = false) }
+            .setNegativeButton("All samples (${newN + archN})") { _, _ -> doTrainNae(useAll = true) }
+            .setNeutralButton("Cancel", null)
+            .show()
+    }
+
+    private fun doTrainNae(useAll: Boolean) {
+        if (runActive) { post("busy — stop first"); return }
         runActive = true
         inferenceExecutor.execute {
             try {
-                post("NAE train: loading $n samples…")
-                val samples = NaeDataset.load(naeDatasetFile())
+                val samples = ArrayList<com.example.activeperception.acquire.NaeTrainer.Sample>()
+                if (useAll) for (a in naeArchiveFiles()) samples += NaeDataset.load(a)
+                samples += NaeDataset.load(naeDatasetFile())
+                if (samples.size < NAE_MIN_TRAIN) {
+                    post("NAE train: ${samples.size} samples in this scope, need $NAE_MIN_TRAIN")
+                    return@execute
+                }
+                val scope = if (useAll) "all" else "new-only"
+                post("NAE train ($scope): ${samples.size} samples…")
                 val bin = com.example.activeperception.acquire.NaeTrainer().train(samples) { ep, tr, va ->
                     if (ep % 5 == 0) post("NAE train: epoch $ep loss ${"%.4f".format(tr)} val ${"%.4f".format(va)}")
                 }
+                val ts = System.currentTimeMillis()
                 java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").writeBytes(bin)
-                val archived = java.io.File(getExternalFilesDir(null),
-                    "nae_dataset_trained_${System.currentTimeMillis()}.bin")
-                val poolArchived = naeDatasetFile().renameTo(archived)
-                post("NAE ready: trained on $n samples" +
-                    (if (poolArchived) " — pool archived; next Train uses only new collects"
-                     else " — pool archive FAILED, next Train would reuse these samples"))
+                java.io.File(getExternalFilesDir(null), "nae_w_${scope}_$ts.bin").writeBytes(bin)
+                if (NaeDataset.count(naeDatasetFile()) > 0) {
+                    naeDatasetFile().renameTo(java.io.File(getExternalFilesDir(null),
+                        "nae_dataset_trained_$ts.bin"))
+                }
+                post("NAE ready ($scope, ${samples.size} samples) — weights active + " +
+                    "copy nae_w_${scope}_$ts.bin; pool archived")
             } catch (e: Exception) {
                 post("NAE train failed: ${e.message}")
             } finally {
