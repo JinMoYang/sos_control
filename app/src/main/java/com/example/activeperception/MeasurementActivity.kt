@@ -286,6 +286,37 @@ class MeasurementActivity : AppCompatActivity() {
             findViewById<Button>(R.id.btnIsoDiag).postDelayed(
                 { findViewById<Button>(R.id.btnIsoDiag).performClick() }, 1500)
         }
+        // General adb runner — the glass touchpad intercepts injected taps (focus-first
+        // model), so radio selection is impossible from the host; this starts any method
+        // directly: `--es run <method>` with optional `--es period 5|10|20`. Methods:
+        // fixed | ae_phone | ae_cust | aeq_phone | aeq_cust | proposed | prop_c |
+        // physsweep | shin_nm | nae | collect_nae. Stop a run with KEYCODE_BACK.
+        intent.getStringExtra("run")?.let { cmd ->
+            intent.getStringExtra("period")?.let { p ->
+                val pid = when (p) {
+                    "10" -> R.id.period10; "20" -> R.id.period20; else -> R.id.period5
+                }
+                findViewById<android.widget.RadioButton>(pid).isChecked = true
+            }
+            val rid = when (cmd) {
+                "fixed" -> R.id.methodFixed
+                "ae_phone" -> R.id.methodAePhone
+                "ae_cust" -> R.id.methodAeCustom
+                "aeq_phone" -> R.id.methodAeQuantPhone
+                "aeq_cust" -> R.id.methodAeQuantCustom
+                "proposed" -> R.id.methodProposed
+                "prop_c" -> R.id.methodContinuous
+                "physsweep" -> R.id.methodPhysSweep
+                "shin_nm" -> R.id.methodShinNM
+                "nae" -> R.id.methodNeuralAe
+                else -> 0
+            }
+            if (rid != 0) findViewById<android.widget.RadioButton>(rid).isChecked = true
+            btnStart.postDelayed({
+                if (cmd == "collect_nae") findViewById<Button>(R.id.btnNaeCollect).performClick()
+                else btnStart.performClick()
+            }, 1500)
+        }
         findViewById<Button>(R.id.btnExp21).setOnClickListener {
             start("exp2_1") { mc!!.runExp21DirectTensor(::post) }
         }
