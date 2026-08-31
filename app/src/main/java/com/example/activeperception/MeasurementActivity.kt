@@ -107,6 +107,14 @@ class MeasurementActivity : AppCompatActivity() {
      *  degrees to the formation path, so both see an upright image. */
     private var driveFlip = false
     @Volatile private var mountOffsetDeg = 0
+    /** Optional head of the playlist: collect NAE training data and train on it before the
+     *  rotation starts. It advances on COMPLETION, not on a block boundary — and that does
+     *  not break the pairing, because the rotation is indexed by the wall clock, so a phone
+     *  joins whatever block is live when its prep finishes. */
+    private var naePrepEnabled = false
+    /** 0 idle, 1 collecting, 2 training. */
+    @Volatile private var prepStage = 0
+    private var prepDone = false
     private lateinit var offloadCheck: CheckBox
     private lateinit var offloadUrl: EditText
     private lateinit var offloadRegime: Spinner
@@ -678,8 +686,8 @@ class MeasurementActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun doTrainNae(useAll: Boolean) {
-        if (runActive) { post("busy — stop first"); return }
+    private fun doTrainNae(useAll: Boolean, onDone: (() -> Unit)? = null) {
+        if (runActive) { post("busy — stop first"); onDone?.invoke(); return }
         runActive = true
         inferenceExecutor.execute {
             try {
@@ -708,6 +716,9 @@ class MeasurementActivity : AppCompatActivity() {
                 post("NAE train failed: ${e.message}")
             } finally {
                 runActive = false
+                // Fires on every exit path, so a too-small pool or a failure still hands
+                // the playlist back instead of stranding it in the prep stage.
+                onDone?.invoke()
             }
         }
     }
@@ -1168,6 +1179,13 @@ class MeasurementActivity : AppCompatActivity() {
                 updateDriveUi()
             }
         }
+        naePrepEnabled = prefs.getBoolean("nae_prep", false)
+        findViewById<Button>(R.id.driveNaePrep).setOnClickListener {
+            naePrepEnabled = !naePrepEnabled
+            prepDone = false          // re-arming asks for a fresh collect
+            prefs.edit().putBoolean("nae_prep", naePrepEnabled).apply()
+            updateDriveUi()
+        }
         findViewById<Button>(R.id.driveFlip).setOnClickListener {
             driveFlip = !driveFlip
             prefs.edit().putBoolean("flip", driveFlip).apply()
@@ -1311,6 +1329,20 @@ class MeasurementActivity : AppCompatActivity() {
         // Every baseline is paired against Prop-C twice per cycle - once on each phone, so
         // device bias cancels - which makes the cycle length the real design knob: the
         // repetitions a drive yields are its duration divided by this.
+        if (naePrepEnabled) driveRowsView.addView(TextView(this).apply {
+            text = (if (prepStage > 0) "▶ " else "   ") + "NAE prep: collect + train" +
+                when {
+                    prepStage == 1 -> "   (collecting…)"
+                    prepStage == 2 -> "   (training…)"
+                    prepDone -> "   (done)"
+                    else -> "   (once, at START)"
+                }
+            textSize = 15f
+            setTextColor(getColor(
+                if (prepStage > 0) R.color.text_primary else R.color.text_readout))
+            typeface = android.graphics.Typeface.MONOSPACE
+            setPadding(4, 4, 4, 4)
+        })
         val nb = baselineRows().size
         driveRowsView.addView(TextView(this).apply {
             val cycleMin = 2 * nb * playlistBlockS / 60.0
@@ -1346,6 +1378,15 @@ class MeasurementActivity : AppCompatActivity() {
         commitBlockSec()
         playlistActive = true
         vibrate(120); playlistHandler.postDelayed({ vibrate(120) }, 220)
+        if (naePrepEnabled && !prepDone) {
+            // No boundary stop is scheduled for prep: the collector ends itself at its
+            // sample target, then training runs, then the rotation is joined.
+            prepStage = 1
+            post("NAE prep: collecting…")
+            updateDriveUi()
+            findViewById<Button>(R.id.btnNaeCollect).performClick()
+            return
+        }
         startPlaylistBlock()
         updateDriveUi()
     }
@@ -1357,6 +1398,7 @@ class MeasurementActivity : AppCompatActivity() {
         findViewById<Button>(R.id.driveRoleA).text =
             if (driveRole == "L") "LEFT · prop odd" else "RIGHT · prop even"
         findViewById<Button>(R.id.driveFlip).alpha = if (driveFlip) 1f else 0.35f
+        findViewById<Button>(R.id.driveNaePrep).alpha = if (naePrepEnabled) 1f else 0.35f
         val si = sessionSpinner.selectedItemPosition
         listOf(R.id.driveSessIndoor, R.id.driveSessDay, R.id.driveSessDim, R.id.driveSessNight)
             .forEachIndexed { i, id -> findViewById<Button>(id).alpha = if (i == si) 1f else 0.35f }
@@ -1436,6 +1478,7 @@ class MeasurementActivity : AppCompatActivity() {
     private fun stopMeasurement(userInitiated: Boolean = true) {
         if (userInitiated && playlistActive) {
             playlistActive = false
+            prepStage = 0
             playlistHandler.removeCallbacksAndMessages(null)
             post("playlist cancelled")
         }
@@ -1790,7 +1833,24 @@ class MeasurementActivity : AppCompatActivity() {
                 // fully unwound (camera and GPU stay open, so the gap is a second or two).
                 runOnUiThread {
                     updateDriveUi()
-                    if (playlistActive) playlistHandler.postDelayed({ startPlaylistBlock() }, 1500)
+                    when {
+                        !playlistActive -> {}
+                        // Prep chains collect -> train -> rotation instead of waiting for
+                        // a boundary, so the drive starts with usable NAE weights.
+                        prepStage == 1 -> {
+                            prepStage = 2
+                            updateDriveUi()
+                            doTrainNae(useAll = false) {
+                                prepStage = 0; prepDone = true
+                                runOnUiThread {
+                                    updateDriveUi()
+                                    if (playlistActive) startPlaylistBlock()
+                                }
+                            }
+                        }
+                        prepStage == 2 -> {}   // training owns the transition
+                        else -> playlistHandler.postDelayed({ startPlaylistBlock() }, 1500)
+                    }
                 }
             }
         }

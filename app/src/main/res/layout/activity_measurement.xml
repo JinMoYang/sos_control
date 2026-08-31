@@ -145,6 +145,12 @@
                     android:text="s"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp" />
+                <Button android:id="@+id/driveNaePrep"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="NAE prep" android:textSize="12sp"
+                    android:minWidth="0dp" android:paddingLeft="10dp"
+                    android:paddingRight="10dp" />
             </LinearLayout>
 
             <Button android:id="@+id/driveStart"
