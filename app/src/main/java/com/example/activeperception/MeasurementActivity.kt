@@ -1072,10 +1072,36 @@ class MeasurementActivity : AppCompatActivity() {
      *  index by one, so two phones running the SAME list always have Prop-C on one side
      *  and a baseline on the other, and every baseline is paired on both phones. */
     private fun defaultRows(): MutableList<PlRow> =
-        listOf("ae_cust", "ae_phone", "shin_nm", "physsweep", "nae")
-            .flatMap { listOf("prop_c", it) }
+        listOf("ae_phone", "ae_cust", "prop_c", "physsweep", "shin_nm", "nae")
             .map { PlRow(it, 10, 4) }
             .toMutableList()
+
+    private fun isProp(m: String) = m == "prop_c" || m == "proposed"
+    private fun baselineRows() = rows.filter { !isProp(it.method) }
+    private fun propRow() = rows.firstOrNull { isProp(it.method) } ?: PlRow("prop_c", 10, 4)
+
+    /** LEFT takes Prop-C on odd blocks, RIGHT on even ones, so exactly one phone is on
+     *  Prop-C at every moment and the other walks the baselines. Naming them by mount
+     *  position instead of A/B is what makes a mistake obvious: the phone on the left of
+     *  the rig is LEFT. Each baseline is seen by BOTH phones in consecutive blocks, so
+     *  device bias cancels without authoring a second list. */
+    private fun isPropBlock(k: Long) = if (driveRole == "R") k % 2L == 0L else k % 2L == 1L
+
+    /** (row to run, its index in the authored list) for wall-clock block [k]. */
+    private fun blockRow(k: Long): Pair<PlRow, Int> {
+        val bl = baselineRows()
+        if (bl.isEmpty()) return propRow() to rows.indexOfFirst { isProp(it.method) }
+        if (isPropBlock(k)) return propRow() to rows.indexOfFirst { isProp(it.method) }
+        val b = bl[((k / 2) % bl.size).toInt()]
+        return b to rows.indexOf(b)
+    }
+
+    /** What the paired phone runs in block [k] — the complement of [blockRow]. */
+    private fun otherRow(k: Long): PlRow {
+        val bl = baselineRows()
+        if (bl.isEmpty()) return propRow()
+        return if (isPropBlock(k)) bl[((k / 2) % bl.size).toInt()] else propRow()
+    }
 
     private fun loadRows() {
         val raw2 = prefs.getString("rows", null)
@@ -1105,17 +1131,9 @@ class MeasurementActivity : AppCompatActivity() {
                 dpBase[2] + bars.right, dpBase[3] + bars.bottom)
             insets
         }
-        // Two phones must not share a role. They cannot negotiate (the whole point is that
-        // no link is needed), so the first launch guesses from the device id and every row
-        // shows what the OTHER phone runs in that block — a collision is then visible at a
-        // glance and one tap on the role button fixes it.
-        driveRole = prefs.getString("role", null) ?: run {
-            val id = android.provider.Settings.Secure.getString(
-                contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "0"
-            val guess = if (abs(id.hashCode()) % 2 == 0) "A" else "B"
-            prefs.edit().putString("role", guess).apply()
-            guess
-        }
+        // Role is the phone's physical place in the rig, so it is set once by looking at
+        // the mount rather than negotiated (there is no link between the phones).
+        driveRole = when (prefs.getString("role", "L")) { "R", "B" -> "R"; else -> "L" }
         driveFlip = prefs.getBoolean("flip", false)
         playlistBlockS = prefs.getInt("block_s", 120)
         sessionSpinner.setSelection(prefs.getInt("session_idx", 0))
@@ -1140,7 +1158,7 @@ class MeasurementActivity : AppCompatActivity() {
                 .putString("offload_url", offloadUrl.text.toString()).apply()
         }
         findViewById<Button>(R.id.driveRoleA).setOnClickListener {
-            setDriveRole(if (driveRole == "A") "B" else "A")
+            setDriveRole(if (driveRole == "L") "R" else "L")
         }
         listOf(R.id.driveSessIndoor to 0, R.id.driveSessDay to 1,
             R.id.driveSessDim to 2, R.id.driveSessNight to 3).forEach { (id, idx) ->
@@ -1253,43 +1271,48 @@ class MeasurementActivity : AppCompatActivity() {
         updateDriveUi()
     }
 
-    /** Reverse portrait only while an inverted mount is declared, so the settings screen
-     *  and the glass are never affected. */
+    /** The flip describes how the phone is MOUNTED, so it holds for every screen — tying
+     *  it to the playlist screen made the editor flip back and forth. */
     private fun applyDriveOrientation() {
-        requestedOrientation = if (driveMode && driveFlip)
+        requestedOrientation = if (driveFlip)
             android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
         else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     }
 
     /** Read before a run starts; per-run pipelines size their buffers after this. */
     private fun applyMountOffset() {
-        mountOffsetDeg = if (driveMode && driveFlip) 180 else 0
+        mountOffsetDeg = if (driveFlip) 180 else 0
         if (::raw.isInitialized) raw.mountOffsetDeg = mountOffsetDeg
     }
 
-    /** Block index for this phone: the wall clock picks it, role B shifts by one. */
-    private fun currentBlockIndex(now: Long = System.currentTimeMillis()): Int {
-        if (rows.isEmpty()) return 0
-        val off = if (driveRole == "B") 1 else 0
-        return (((now / 1000 / playlistBlockS) + off) % rows.size).toInt()
-    }
+    /** Wall-clock block number — the same integer on both phones, which is what lets them
+     *  pair with no link and lets a run be matched to its partner offline. */
+    private fun currentBlockIndex(now: Long = System.currentTimeMillis()): Long =
+        now / 1000 / playlistBlockS
 
     /** Rebuilds the row list: the live block is marked, tap edits, long-press deletes. */
     private fun renderRows() {
         if (!::driveRowsView.isInitialized) return
         driveRowsView.removeAllViews()
-        val cur = currentBlockIndex()
+        val k = currentBlockIndex()
+        val liveIdx = blockRow(k).second
         val left = (playlistBlockS * 1000L -
             System.currentTimeMillis() % (playlistBlockS * 1000L)) / 1000
+        driveRowsView.addView(TextView(this).apply {
+            // The pairing is dynamic now, so it is stated once for the live block: two
+            // phones left on the same role read prop_c facing prop_c here.
+            text = "now  ${rowLabel(blockRow(k).first)}  ⟷  ${rowLabel(otherRow(k))}" +
+                "   (${left}s)"
+            textSize = 15f
+            setTextColor(getColor(R.color.text_primary))
+            typeface = android.graphics.Typeface.MONOSPACE
+            setPadding(4, 2, 4, 12)
+        })
         rows.forEachIndexed { i, r ->
-            val live = i == cur
-            // What the paired phone runs in this block, so a role collision (both phones
-            // on the same offset) shows up as prop_c facing prop_c.
-            val other = rows[(if (driveRole == "A") i + 1 else i - 1 + rows.size) % rows.size]
+            val live = i == liveIdx
             val tv = TextView(this).apply {
                 text = (if (live) "▶ " else "   ") + rowLabel(r) +
-                    "   ⟷ " + rowLabel(other) +
-                    (if (live) "   (${left}s)" else "")
+                    (if (isProp(r.method)) "   (every other block)" else "")
                 textSize = 16f
                 setTextColor(getColor(
                     if (live) R.color.text_primary else R.color.text_readout))
@@ -1317,7 +1340,8 @@ class MeasurementActivity : AppCompatActivity() {
         if (!::drivePanel.isInitialized) return
         val running = playlistActive || runActive
         driveStart.text = if (running) "STOP\n(hold)" else "START"
-        findViewById<Button>(R.id.driveRoleA).text = "ROLE $driveRole"
+        findViewById<Button>(R.id.driveRoleA).text =
+            if (driveRole == "L") "LEFT · prop odd" else "RIGHT · prop even"
         findViewById<Button>(R.id.driveFlip).alpha = if (driveFlip) 1f else 0.35f
         val si = sessionSpinner.selectedItemPosition
         listOf(R.id.driveSessIndoor, R.id.driveSessDay, R.id.driveSessDim, R.id.driveSessNight)
@@ -1379,9 +1403,9 @@ class MeasurementActivity : AppCompatActivity() {
             return
         }
         if (rows.isEmpty()) { playlistActive = false; post("playlist is empty"); return }
-        val idx = currentBlockIndex(now)
-        val row = rows[idx]
-        post("[$driveRole] block $idx: ${row.method} (${remain / 1000}s)")
+        val k = currentBlockIndex(now)
+        val row = blockRow(k).first
+        post("[$driveRole] block $k: ${row.method} (${remain / 1000}s)")
         // One buzz per scheme change: the driver never needs to look at the screen.
         vibrate(150)
         // A row IS the settings screen's state, so launching a block is restoring it and
