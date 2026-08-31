@@ -830,25 +830,26 @@ class MeasurementController(
         return written
     }
 
-    /** V2 collection: the 5x5 surface is visited PHYSICALLY each step — 15 captures
-     *  (analog bases {100,400,1200} x 5 shutters, 0-frame actuation), with rungs formed
-     *  from the nearest base so no cell is further than x1.33 digital from an analog
-     *  original (200 = 400/2, 800 = 1200x0.667, 1600 = 1200x1.333). Sampled hists come
-     *  from the same renditions deployment would see. Labels as in [runNaeCollect]:
-     *  ln(e_argmax_next / e_cell) clamped +-ln10 from the NEXT step's surface; all-zero
-     *  surfaces contribute nothing. Sampling: previous step's argmax + randoms (this
-     *  step's argmax is unknown until every capture is scored). */
+    /** V2 collection: every one of the 25 cells is captured PHYSICALLY each step (0-frame
+     *  actuation makes the full sweep ~2.5 s). Surface scores, the label argmax and the
+     *  sampled hists all come from real captures of their exact cells — no digital
+     *  formation anywhere in the training data, and features match what deployment sees
+     *  (the 1600 rung's x1.33 residual is the cell's own realization, identical at
+     *  deployment). Labels as in [runNaeCollect]: ln(e_argmax_next / e_cell) clamped
+     *  +-ln10 from the NEXT step's surface; all-zero surfaces contribute nothing.
+     *  Sampling: previous step's argmax + randoms (this step's argmax is unknown until
+     *  every capture is scored). */
     fun runNaeCollectV2(dataset: java.io.File, targetSamples: Int, maxFrames: Int,
                         cellsPerStep: Int = 3,
                         onStatus: (String) -> Unit,
                         onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }): Int {
         val g = v2Space
-        val ceil = v2AnalogCeil()
         startPass("nae_collect_v2", isGtReference = false, methodParams = JSONObject()
             .put("purpose", "neural_ae_training_data")
             .put("space", "v2_lattice_5x5")
-            .put("probe", "physical 15-capture surface: analog bases {100,400,1200} x " +
-                "5 shutters; rungs 200/800/1600 form as 0.5/0.667/1.333 of the nearest base")
+            .put("probe", "fully physical 25-capture surface: every cell captured at its " +
+                "own realization (min(nominal, analog ceiling) + residual), no digital " +
+                "formation in labels or features")
             .put("cells_per_step", cellsPerStep)
             .put("target_samples", targetSamples)
             .put("label", "ln(e_argmax_next / e_cell) clamped to +-ln10")
@@ -863,11 +864,6 @@ class MeasurementController(
             rng = (rng * 6364136223846793005L + 1442695040888963407L)
             return (((rng ushr 33).toInt() % bound) + bound) % bound
         }
-        val bases = listOf(
-            100 to intArrayOf(0),
-            400 to intArrayOf(1, 2),
-            1200 to intArrayOf(3, 4)
-        )
         var prevChosenCell = g.cell(g.nGain - 1, 0)
         var written = 0
         withFastPipeline(onStatus) { pipe ->
@@ -889,37 +885,25 @@ class MeasurementController(
                 var previewTensor: Exp21TensorResult? = null
                 var previewLane = 0
                 var inferSum = 0.0
-                for (sj in g.exposuresUs.indices) {
+                for (cellId in 0 until nCells) {
                     if (!running) break
-                    for ((baseIso, rungIdxs) in bases) {
-                        val phys = minOf(baseIso, ceil)
-                        val frames = pipe.capture(g.exposuresUs[sj], phys, 1)
-                        if (frames.isEmpty()) continue
-                        val ratios = DoubleArray(rungIdxs.size) {
-                            g.gains[rungIdxs[it]].toDouble() / phys
-                        }
-                        val tensor = pipe.source.formExplicitGainsTensor(frames[0], ratios)
-                        val ds = pipe.tfl.detectTensorBatchOptimized(tensor.batch)
-                        inferSum += pipe.inferMs
-                        for (k in rungIdxs.indices) {
-                            val cellId = g.cell(rungIdxs[k], sj)
-                            scores[cellId] = sumConf(ds[k])
-                            detsByCell[cellId] = ds[k]
-                            if (cellId in picks) {
-                                val b = pipe.bitmap(tensor, k)
-                                val p = IntArray(b.width * b.height)
-                                b.getPixels(p, 0, b.width, 0, 0, b.width, b.height)
-                                val l = ShinMetric.lumFromArgb(p, b.width, b.height)
-                                histByCell[cellId] =
-                                    NaeFeatures.multiScaleHist(l, b.width, b.height)
-                                if (cellId == prevChosenCell) {
-                                    previewBmp = b; previewCell = cellId
-                                    // Transforms are immutable; only the shared buffer is
-                                    // reused, and previewDets reads transforms alone.
-                                    previewTensor = tensor; previewLane = k
-                                } else b.recycle()
-                            }
-                        }
+                    val (cgi, csj) = g.indices(cellId)
+                    val r = pipe.captureV2Cell(g.gains[cgi], g.exposuresUs[csj]) ?: continue
+                    inferSum += pipe.inferMs
+                    scores[cellId] = sumConf(r.second)
+                    detsByCell[cellId] = r.second
+                    if (cellId in picks) {
+                        val b = pipe.bitmap(r.first, 0)
+                        val p = IntArray(b.width * b.height)
+                        b.getPixels(p, 0, b.width, 0, 0, b.width, b.height)
+                        val l = ShinMetric.lumFromArgb(p, b.width, b.height)
+                        histByCell[cellId] = NaeFeatures.multiScaleHist(l, b.width, b.height)
+                        if (cellId == prevChosenCell) {
+                            previewBmp = b; previewCell = cellId
+                            // Transforms are immutable; only the shared buffer is reused,
+                            // and previewDets reads transforms alone.
+                            previewTensor = r.first; previewLane = 0
+                        } else b.recycle()
                     }
                 }
                 // Label the previous step's samples from this step's argmax.
