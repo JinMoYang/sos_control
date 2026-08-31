@@ -623,6 +623,12 @@ class MeasurementActivity : AppCompatActivity() {
         1 -> "outdoor_day"; 2 -> "dim"; 3 -> "outdoor_night"; else -> "indoor"
     }
 
+    /** The rig the camera rides. It names the run directory and is recorded in the
+     *  manifest, so a mixed pile of runs can be split by platform without guessing. */
+    private val platformTags = listOf("limo", "car", "rayneo")
+    private var platformIdx = 0
+    private fun platformTag() = platformTags[platformIdx.coerceIn(0, 2)]
+
     private fun naeDatasetFile() = java.io.File(getExternalFilesDir(null), "nae_dataset.bin")
 
     /** Neural-AE data collection only: one press appends up to [NAE_TARGET_SAMPLES] to the
@@ -894,6 +900,7 @@ class MeasurementActivity : AppCompatActivity() {
         val selectConf = confThreshSpinner.selectedItem?.toString()?.toFloatOrNull() ?: 0.25f
         displayConfThreshold = selectConf
         val sess = sessionTag()
+        val plat = platformTag()
         applyMountOffset()
         val session = RotationRunSession(System.currentTimeMillis())
         rotationSession = session
@@ -929,11 +936,12 @@ class MeasurementActivity : AppCompatActivity() {
                 val requestLatencyNs = (firstSensorNs - submittedNs).coerceAtLeast(0L)
                 if (session.cancelled) return@execute
 
-                val runName = "run_rotation_${modeTag}_${session.id}"
+                val runName = "run_${plat}_rotation_${modeTag}_${session.id}"
                 val logger = MeasurementLogger(this, runName)
                 session.logger = logger
                 val mcLocal = MeasurementController(raw, detector, grid, sensors, logger, health, selectConf)
                 mcLocal.setV2Session(sess)
+                mcLocal.platformTag = plat
                 mc = mcLocal
                 offloader = offUrl?.let {
                     OffloadClient(it, logger.dir, offRegime) { mcLocal.lastFrameIdx }
@@ -1191,6 +1199,17 @@ class MeasurementActivity : AppCompatActivity() {
                 updateDriveUi()
             }
         }
+        // The glass is its own rig, so it starts there; `--es platform car` overrides for
+        // adb-driven starts.
+        platformIdx = prefs.getInt("platform", if (rayNeoTouchpad) 2 else 0)
+        intent.getStringExtra("platform")?.let { t ->
+            val i = platformTags.indexOf(t); if (i >= 0) platformIdx = i
+        }
+        findViewById<Button>(R.id.drivePlatform).setOnClickListener {
+            platformIdx = (platformIdx + 1) % platformTags.size
+            prefs.edit().putInt("platform", platformIdx).apply()
+            updateDriveUi()
+        }
         findViewById<TextView>(R.id.driveReference).setOnClickListener {
             val i = rows.indexOfFirst { r -> isProp(r.method) }
             if (i >= 0) openEditor(i) else openEditor(-1)
@@ -1445,6 +1464,7 @@ class MeasurementActivity : AppCompatActivity() {
         findViewById<Button>(R.id.driveRoleA).text =
             if (driveRole == "L") "LEFT · prop odd" else "RIGHT · prop even"
         findViewById<Button>(R.id.driveFlip).alpha = if (driveFlip) 1f else 0.35f
+        findViewById<Button>(R.id.drivePlatform).text = platformTag().uppercase()
         val si = sessionSpinner.selectedItemPosition
         listOf(R.id.driveSessIndoor, R.id.driveSessDay, R.id.driveSessDim, R.id.driveSessNight)
             .forEachIndexed { i, id -> findViewById<Button>(id).alpha = if (i == si) 1f else 0.35f }
@@ -1829,6 +1849,7 @@ class MeasurementActivity : AppCompatActivity() {
         val selectConf = (confThreshSpinner.selectedItem?.toString()?.toFloatOrNull()) ?: 0.25f
         displayConfThreshold = selectConf
         val sess = sessionTag()
+        val plat = platformTag()
         applyMountOffset()
         runActive = true
         inferenceExecutor.execute {
@@ -1850,10 +1871,13 @@ class MeasurementActivity : AppCompatActivity() {
                     post("GPU ready ${detector.backendSummary} — capturing first frame…")
                     opened = true
                 }
-                val runName = "run_${modeTag}_${System.currentTimeMillis()}"
+                // Platform leads the name so a mixed directory groups by rig, while the
+                // epoch stays last for the parsers that split on it.
+                val runName = "run_${plat}_${modeTag}_${System.currentTimeMillis()}"
                 val logger = MeasurementLogger(this, runName)
                 val mcLocal = MeasurementController(raw, detector, grid, sensors, logger, health, selectConf)
                 mcLocal.setV2Session(sess)
+                mcLocal.platformTag = plat
                 mc = mcLocal
                 // The currentFrame supplier reads lastFrameIdx, so staleness is measured
                 // against the same frame index that frames.csv records.

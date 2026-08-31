@@ -191,6 +191,7 @@ class MeasurementController(
         m.put("white_level", raw.maxDn)
         m.put("sync_max_latency", raw.syncMaxLatency)
         m.put("timestamp_source", raw.timestampSource)
+        m.put("platform", platformTag)
         m.put("sensor_orientation", raw.sensorOrientation)
         m.put("sensor_iso_range", JSONObject()
             .put("min", raw.sensorIsoMin).put("max", raw.sensorIsoMax))
@@ -3550,6 +3551,9 @@ class MeasurementController(
     private val v2SessionAliases = mapOf(
         "walk" to "dim", "vehicle_night" to "outdoor_night", "vehicle_day" to "outdoor_day")
     @Volatile private var v2SessionTag = "indoor"
+    /** The rig this run rode (limo / car / rayneo), recorded in every manifest so a mixed
+     *  pile of runs can be split by platform without parsing directory names. */
+    @Volatile var platformTag: String = ""
     /** The v2 lattice as a Grid, so the space-generic baselines (PhysSweep, ShinNM,
      *  NeuralAE snap) can search the SAME space Prop-C lives on. Boost 1: v2 has no
      *  digital-boost concept — nominal ISO is the label. */

@@ -145,6 +145,14 @@
                     android:text="s"
                     android:textColor="@color/text_primary"
                     android:textSize="14sp" />
+                <!-- Which rig the camera is riding. Cycles on tap: three values, and the
+                     label always shows the live one, so it costs no vertical space. -->
+                <Button android:id="@+id/drivePlatform"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="LIMO" android:textSize="13sp"
+                    android:minWidth="0dp" android:paddingLeft="12dp"
+                    android:paddingRight="12dp" />
             </LinearLayout>
 
             <!-- The constant partner of every rotating row. It is not a peer in the list,
