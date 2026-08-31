@@ -71,6 +71,28 @@
                 android:textColor="@color/text_readout"
                 android:textSize="10sp" />
 
+            <!-- Session preset: shifts the v2 gain-ladder anchor (indoor / walk /
+                 vehicle-night / vehicle-day). Read at run start; also settable via
+                 the "session" string intent extra for adb-driven devices. -->
+            <LinearLayout
+                android:id="@+id/sessionRow"
+                style="@style/OptionRow"
+                android:gravity="center_vertical"
+                android:layout_marginTop="0dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Session:"
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp" />
+                <Spinner android:id="@+id/sessionSpinner"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:minHeight="40dp" />
+            </LinearLayout>
+
             <!-- Method, two linked rows (the Activity makes them one exclusive choice).
                  AE strategies are flattened into distinct methods so a run's arm is
                  chosen - and visible - in one place, with no nested strategy group. -->

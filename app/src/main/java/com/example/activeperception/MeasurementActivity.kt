@@ -92,6 +92,7 @@ class MeasurementActivity : AppCompatActivity() {
     private lateinit var boostGroup: RadioGroup
     private lateinit var proposedSettings: LinearLayout
     private lateinit var confThreshSpinner: Spinner
+    private lateinit var sessionSpinner: Spinner
     private lateinit var offloadCheck: CheckBox
     private lateinit var offloadUrl: EditText
     private lateinit var offloadRegime: Spinner
@@ -167,6 +168,16 @@ class MeasurementActivity : AppCompatActivity() {
             android.R.layout.simple_spinner_item, confChoices
         ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         confThreshSpinner.setSelection(confChoices.indexOf("0.05").coerceAtLeast(0))
+        sessionSpinner = findViewById(R.id.sessionSpinner)
+        val sessionLabels = listOf("Indoor", "Walk", "Veh-Night", "Veh-Day")
+        sessionSpinner.adapter = ArrayAdapter(this,
+            android.R.layout.simple_spinner_item, sessionLabels
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        // `--es session indoor|walk|vehicle_night|vehicle_day` preselects (adb-driven glass).
+        val sessTags = listOf("indoor", "walk", "vehicle_night", "vehicle_day")
+        intent.getStringExtra("session")?.let { tag ->
+            val i = sessTags.indexOf(tag); if (i >= 0) sessionSpinner.setSelection(i)
+        }
         offloadCheck = findViewById(R.id.offloadCheck)
         offloadUrl = findViewById(R.id.offloadUrl)
         offloadRegime = findViewById(R.id.offloadRegime)
@@ -297,6 +308,25 @@ class MeasurementActivity : AppCompatActivity() {
         // every control need TWO taps (focusableInTouchMode: first tap focuses, second
         // clicks), so the phone profile keeps plain touch and hides the glass-only chrome.
         if (rayNeoTouchpad) configureStaticTouchpadControls()
+        // Glass simple mode: the temple touchpad makes the dense phone UI painful, so on
+        // RayNeo everything except the essentials is hidden — session, the two method
+        // rows, the proposed settings (period/fallback), Start/Stop and the NAE row.
+        // Hidden buttons stay functional for intent-driven autorun (performClick works
+        // on GONE views), and offload still arrives via the server_url extra.
+        if (rayNeoTouchpad) {
+            val keep = setOf<View>(
+                findViewById(R.id.touchpadHelp),
+                findViewById(R.id.sessionRow),
+                methodGroup, findViewById(R.id.methodGroup2),
+                proposedSettings,
+                btnStart.parent as View,
+                findViewById<Button>(R.id.btnNaeCollect).parent as View
+            )
+            for (i in 0 until controlsInner.childCount) {
+                val c = controlsInner.getChildAt(i)
+                if (c !in keep) c.visibility = View.GONE
+            }
+        }
         else configurePhoneProfileUi()
         // Start is the safest useful default: one tap launches the default Proposed mode.
         if (rayNeoTouchpad) btnStart.post { btnStart.requestFocus() }
@@ -529,6 +559,10 @@ class MeasurementActivity : AppCompatActivity() {
         }.recoverCatching {
             assets.open("nae_hist_scalar_3x3.bin").use { it.readBytes() }
         }.getOrNull()
+
+    private fun sessionTag(): String = when (sessionSpinner.selectedItemPosition) {
+        1 -> "walk"; 2 -> "vehicle_night"; 3 -> "vehicle_day"; else -> "indoor"
+    }
 
     private fun naeDatasetFile() = java.io.File(getExternalFilesDir(null), "nae_dataset.bin")
 
@@ -797,6 +831,7 @@ class MeasurementActivity : AppCompatActivity() {
         val offRegime = (offloadRegime.selectedItem?.toString() ?: "clear").ifBlank { "clear" }
         val selectConf = confThreshSpinner.selectedItem?.toString()?.toFloatOrNull() ?: 0.25f
         displayConfThreshold = selectConf
+        val sess = sessionTag()
         val session = RotationRunSession(System.currentTimeMillis())
         rotationSession = session
         runActive = true
@@ -834,6 +869,7 @@ class MeasurementActivity : AppCompatActivity() {
                 val logger = MeasurementLogger(this, runName)
                 session.logger = logger
                 val mcLocal = MeasurementController(raw, detector, grid, sensors, logger, health, selectConf)
+                mcLocal.setV2Session(sess)
                 mc = mcLocal
                 offloader = offUrl?.let {
                     OffloadClient(it, logger.dir, offRegime) { mcLocal.lastFrameIdx }
@@ -1214,6 +1250,7 @@ class MeasurementActivity : AppCompatActivity() {
         val offRegime = (offloadRegime.selectedItem?.toString() ?: "clear").ifBlank { "clear" }
         val selectConf = (confThreshSpinner.selectedItem?.toString()?.toFloatOrNull()) ?: 0.25f
         displayConfThreshold = selectConf
+        val sess = sessionTag()
         runActive = true
         inferenceExecutor.execute {
             try {
@@ -1236,6 +1273,7 @@ class MeasurementActivity : AppCompatActivity() {
                 val runName = "run_${modeTag}_${System.currentTimeMillis()}"
                 val logger = MeasurementLogger(this, runName)
                 val mcLocal = MeasurementController(raw, detector, grid, sensors, logger, health, selectConf)
+                mcLocal.setV2Session(sess)
                 mc = mcLocal
                 // The currentFrame supplier reads lastFrameIdx, so staleness is measured
                 // against the same frame index that frames.csv records.

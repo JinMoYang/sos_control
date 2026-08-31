@@ -483,7 +483,7 @@ class MeasurementController(
                      onStatus: (String) -> Unit,
                      v2: Boolean = false,
                      onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }) {
-        val g = if (v2) v2Space else grid
+        val g = if (v2) v2SpaceCur else grid
         fun eff(iso: Int) = if (v2) iso else effIso(iso)
         val tag = (if (v2) "physsweep_v2" else "physsweep") +
             (if (full) "_full_h$hold" else "_col_h$hold")
@@ -491,6 +491,8 @@ class MeasurementController(
             .put("baseline", "phys_sweep_lens_iclr25")
             .put("full", full).put("hold", hold)
             .put("space", if (v2) "v2_lattice_5x5" else "device_grid")
+            .put("session", if (v2) v2SessionTag else "device_grid")
+            .put("gain_rungs", JSONArray((if (v2) v2GainRungs else grid.gains).toList()))
             .put("col_shutter_rule", "previous_winner_row (sim uses per-frame AE metering)"))
         logger.csv("candidates", listOf("frame", "cell", "gain", "exposure_us",
             "sum_conf", "chosen", "tie_break"))
@@ -564,7 +566,7 @@ class MeasurementController(
                   v2: Boolean = false,
                   onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }) {
         require(mode == "hold" || mode == "restart_int" || mode == "always")
-        val g = if (v2) v2Space else grid
+        val g = if (v2) v2SpaceCur else grid
         fun eff(iso: Int) = if (v2) iso else effIso(iso)
         // Stop-space search assumes power-of-2 spacing on both axes.
         val uMax = maxOf(g.nGain - 1, g.nShutter - 1).toDouble()
@@ -572,6 +574,8 @@ class MeasurementController(
             isGtReference = false, methodParams = JSONObject()
             .put("baseline", "shin_iros19_nelder_mead").put("mode", mode).put("u_max", uMax)
             .put("space", if (v2) "v2_lattice_5x5" else "device_grid")
+            .put("session", if (v2) v2SessionTag else "device_grid")
+            .put("gain_rungs", JSONArray((if (v2) v2GainRungs else grid.gains).toList()))
             .put("start_rule", "proposed_cold_start_cell (sim: AE metering cell)"))
         logger.csv("candidates", listOf("frame", "cell", "gain", "exposure_us",
             "metric", "chosen", "tie_break"))
@@ -659,13 +663,15 @@ class MeasurementController(
                     v2: Boolean = false,
                     onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }) {
         val net = NeuralAeNet(weights)
-        val g = if (v2) v2Space else grid
+        val g = if (v2) v2SpaceCur else grid
         fun eff(iso: Int) = if (v2) iso else effIso(iso)
         startPass(if (v2) "nae_v2_hist_scalar_ema" else "nae_hist_scalar_ema",
             isGtReference = false, methodParams = JSONObject()
             .put("baseline", "neural_ae_cvpr21_style").put("variant", "hist_scalar")
             .put("mode", "ema").put("weights_bytes", weights.size)
             .put("space", if (v2) "v2_lattice_5x5" else "device_grid")
+            .put("session", if (v2) v2SessionTag else "device_grid")
+            .put("gain_rungs", JSONArray((if (v2) v2GainRungs else grid.gains).toList()))
             .put("start_rule", "proposed_cold_start_cell (sim: AE metering cell)"))
         withFastPipeline(onStatus) { pipe ->
             var cell = g.cell(g.nGain - 1, 0)
@@ -843,10 +849,13 @@ class MeasurementController(
                         cellsPerStep: Int = 3,
                         onStatus: (String) -> Unit,
                         onFrame: (Bitmap, List<Detection>, Int /*iso*/, Int /*expUs*/) -> Unit = { _, _, _, _ -> }): Int {
-        val g = v2Space
+        val g = v2SpaceCur
         startPass("nae_collect_v2", isGtReference = false, methodParams = JSONObject()
             .put("purpose", "neural_ae_training_data")
             .put("space", "v2_lattice_5x5")
+            .put("session", v2SessionTag)
+            .put("gain_rungs", JSONArray(g.gains.toList()))
+            .put("rung_residuals", v2ResidualsJson())
             .put("probe", "fully physical 25-capture surface: every cell captured at its " +
                 "own realization (min(nominal, analog ceiling) + residual), no digital " +
                 "formation in labels or features")
@@ -3524,18 +3533,48 @@ class MeasurementController(
      *  min(rung, analog ceiling); only the 1600 rung carries a digital residual (x1.33 on
      *  a 1200 capture). Consecutive shutter rungs are exact x2, so any window row is a
      *  same-ISO FIRST_N burst sum (1/2/4 frames) of the window-min exposure. */
-    private val v2GainRungs = intArrayOf(100, 200, 400, 800, 1600)
-    private val v2ShutterRungsUs = intArrayOf(2083, 4167, 8333, 16667, 33333)
-    private fun v2Cell(gi: Int, sj: Int) = gi * v2ShutterRungsUs.size + sj
-
+    /** Session presets shift the 5-rung gain ladder's ANCHOR, not its width: the dark end
+     *  is reachable only through ISO (shutter caps at 1/30), while the bright end is the
+     *  shutter's job — so a night ladder pushes up without losing anything below. Rungs
+     *  above the device's analog ceiling are digital-extension rungs (realized as
+     *  ceiling-analog x residual); residuals are recorded per run. */
+    private val v2Sessions = linkedMapOf(
+        "indoor" to intArrayOf(100, 200, 400, 800, 1600),
+        "walk" to intArrayOf(200, 400, 800, 1600, 3200),
+        "vehicle_night" to intArrayOf(400, 800, 1600, 3200, 6400),
+        "vehicle_day" to intArrayOf(100, 200, 400, 800, 1600)
+    )
+    @Volatile private var v2SessionTag = "indoor"
     /** The v2 lattice as a Grid, so the space-generic baselines (PhysSweep, ShinNM,
      *  NeuralAE snap) can search the SAME space Prop-C lives on. Boost 1: v2 has no
      *  digital-boost concept — nominal ISO is the label. */
-    private val v2Space = Grid(
-        gains = intArrayOf(100, 200, 400, 800, 1600),
+    @Volatile private var v2SpaceCur = Grid(
+        gains = v2Sessions["indoor"]!!,
         exposuresUs = intArrayOf(2083, 4167, 8333, 16667, 33333),
         digitalBoost = 1.0
     )
+
+    /** Select the session ladder before a run starts (per-run pipelines and manifests
+     *  read it once at startPass). Unknown tags keep the current session. */
+    fun setV2Session(tag: String) {
+        val gains = v2Sessions[tag] ?: return
+        v2SessionTag = tag
+        v2SpaceCur = Grid(gains = gains,
+            exposuresUs = intArrayOf(2083, 4167, 8333, 16667, 33333), digitalBoost = 1.0)
+    }
+
+    private val v2GainRungs: IntArray get() = v2SpaceCur.gains
+    private val v2ShutterRungsUs = intArrayOf(2083, 4167, 8333, 16667, 33333)
+    private fun v2Cell(gi: Int, sj: Int) = gi * v2ShutterRungsUs.size + sj
+
+    /** Per-rung digital residual (nominal / analog-realized) for the manifest. */
+    private fun v2ResidualsJson(): JSONArray {
+        val ceil = v2AnalogCeil()
+        val arr = JSONArray()
+        for (r in v2GainRungs) arr.put(
+            "%.4f".format(r.toDouble() / minOf(r, ceil)).toDouble())
+        return arr
+    }
     private fun v2AnalogCeil() = if (raw.maxAnalogIso > 0) raw.maxAnalogIso else raw.sensorIsoMax
 
     /** Physical visit of one v2 cell, realized exactly as Prop-C realizes it: capture at
@@ -3632,7 +3671,9 @@ class MeasurementController(
         val analogCeil = if (raw.maxAnalogIso > 0) raw.maxAnalogIso else raw.sensorIsoMax
         startPass("proposed_v2_continuous", isGtReference = false, methodParams = JSONObject()
             .put("title", "Continuous v2 | selection-following base, single-capture window")
+            .put("session", v2SessionTag)
             .put("gain_rungs", JSONArray(v2GainRungs.toList()))
+            .put("rung_residuals", v2ResidualsJson())
             .put("shutter_rungs_us", JSONArray(v2ShutterRungsUs.toList()))
             .put("analog_ceiling", analogCeil)
             .put("period", period).put("hysteresis", 2)
