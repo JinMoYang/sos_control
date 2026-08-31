@@ -187,7 +187,13 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
     val bitmapWidth: Int get() = if (sensorOrientation.mod(180) == 0) sensorBitmapWidth else sensorBitmapHeight
     val bitmapHeight: Int get() = if (sensorOrientation.mod(180) == 0) sensorBitmapHeight else sensorBitmapWidth
     var timestampSource: Int = 0; private set
-    var sensorOrientation: Int = 0; private set
+    /** Extra clockwise rotation for non-upright mounts (0/90/180/270), added to the
+     *  sensor's own orientation so the whole pipeline — detector input, preview and JPEG
+     *  logging — sees an upright image. Set before a run starts: formation buffers are
+     *  sized from [bitmapWidth]/[bitmapHeight] when a pipeline warms up. */
+    @Volatile var mountOffsetDeg: Int = 0
+    private var sensorOrientationBase: Int = 0
+    val sensorOrientation: Int get() = (sensorOrientationBase + mountOffsetDeg).mod(360)
     /** SENSOR_INFO_SENSITIVITY_RANGE, so AE-style modes can clamp requests to what the
      *  HAL can actually apply (a request past the range never metadata-approves). */
     var sensorIsoMin: Int = 100; private set
@@ -262,7 +268,7 @@ class RawSensorCapturer(private val context: Context) : RawCapturer {
         syncMaxLatency = chars.get(CameraCharacteristics.SYNC_MAX_LATENCY)
             ?: CameraMetadata.SYNC_MAX_LATENCY_UNKNOWN
         timestampSource = chars.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ?: 0
-        sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        sensorOrientationBase = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.let {
             sensorIsoMin = it.lower; sensorIsoMax = it.upper
         }

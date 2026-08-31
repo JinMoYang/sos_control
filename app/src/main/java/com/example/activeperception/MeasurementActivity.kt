@@ -97,9 +97,15 @@ class MeasurementActivity : AppCompatActivity() {
     private lateinit var driveStart: Button
     private lateinit var driveStatus: TextView
     private val prefs by lazy { getSharedPreferences("sos_ui", MODE_PRIVATE) }
+    private lateinit var drivePlaylistText: TextView
     private var driveMode = false
     private var driveRole = "A"
     private var driveShownAtMs = 0L
+    /** Car mounts hold the phone inverted, which turns the scene upside down for both the
+     *  driver and the detector. The flip rotates the UI (reverse portrait) and adds 180
+     *  degrees to the formation path, so both see an upright image. */
+    private var driveFlip = false
+    @Volatile private var mountOffsetDeg = 0
     private lateinit var offloadCheck: CheckBox
     private lateinit var offloadUrl: EditText
     private lateinit var offloadRegime: Spinner
@@ -873,6 +879,7 @@ class MeasurementActivity : AppCompatActivity() {
         val selectConf = confThreshSpinner.selectedItem?.toString()?.toFloatOrNull() ?: 0.25f
         displayConfThreshold = selectConf
         val sess = sessionTag()
+        applyMountOffset()
         val session = RotationRunSession(System.currentTimeMillis())
         rotationSession = session
         runActive = true
@@ -886,6 +893,7 @@ class MeasurementActivity : AppCompatActivity() {
                 if (!opened) {
                     post("ROTATION PRELOAD · opening camera…")
                     raw = RawSensorCapturer(this); raw.open()
+                    raw.mountOffsetDeg = mountOffsetDeg
                     post("ROTATION PRELOAD · loading YOLO GPU batches…")
                     detector = createProfiledDetector()
                     opened = true
@@ -1057,6 +1065,15 @@ class MeasurementActivity : AppCompatActivity() {
             prefs.edit().putInt("session_idx", idx).apply()
             updateDriveUi()
         }
+        drivePlaylistText = findViewById(R.id.drivePlaylist)
+        driveFlip = prefs.getBoolean("flip", false)
+        findViewById<Button>(R.id.driveFlip).setOnClickListener {
+            driveFlip = !driveFlip
+            prefs.edit().putBoolean("flip", driveFlip).apply()
+            applyDriveOrientation()
+            applyMountOffset()
+            updateDriveUi()
+        }
         findViewById<Button>(R.id.driveToLab).setOnClickListener { setDriveMode(false) }
         driveStart.setOnClickListener {
             // Entering drive mode reveals this button under the finger that was still on
@@ -1094,7 +1111,41 @@ class MeasurementActivity : AppCompatActivity() {
         prefs.edit().putBoolean("drive_mode", on).apply()
         drivePanel.visibility = if (on) View.VISIBLE else View.GONE
         controlsScroll.visibility = if (on) View.GONE else View.VISIBLE
+        applyDriveOrientation()
+        applyMountOffset()
         updateDriveUi()
+    }
+
+    /** Reverse portrait only while an inverted mount is declared, so the lab profile and
+     *  the glass are never affected. */
+    private fun applyDriveOrientation() {
+        requestedOrientation = if (driveMode && driveFlip)
+            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+        else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+
+    /** Read before a run starts; per-run pipelines size their buffers after this. */
+    private fun applyMountOffset() {
+        mountOffsetDeg = if (driveMode && driveFlip) 180 else 0
+        if (::raw.isInitialized) raw.mountOffsetDeg = mountOffsetDeg
+    }
+
+    /** The whole rotation with the live block marked — before a start it previews the
+     *  block the wall clock would pick, so what is coming is readable at a glance. */
+    private fun renderPlaylistText() {
+        if (!::drivePlaylistText.isInitialized) return
+        val list = rolePlaylist(driveRole)
+        val blockS = if (playlistActive) playlistBlockS else 120
+        val now = System.currentTimeMillis()
+        val cur = ((now / 1000 / blockS) % list.size).toInt()
+        val left = (blockS * 1000L - now % (blockS * 1000L)) / 1000
+        val sb = StringBuilder("role $driveRole · ${blockS}s blocks · ${left}s to next\n")
+        list.forEachIndexed { i, cmd ->
+            sb.append(if (i == cur) "▶ " else "   ").append(cmd)
+            if (i == cur && playlistActive) sb.append("   (${left}s)")
+            sb.append('\n')
+        }
+        drivePlaylistText.text = sb.toString().trimEnd()
     }
 
     private fun startDrivePlaylist() {
@@ -1119,6 +1170,8 @@ class MeasurementActivity : AppCompatActivity() {
         val si = sessionSpinner.selectedItemPosition
         listOf(R.id.driveSessIndoor, R.id.driveSessDay, R.id.driveSessDim, R.id.driveSessNight)
             .forEachIndexed { i, id -> findViewById<Button>(id).alpha = if (i == si) 1f else 0.35f }
+        findViewById<Button>(R.id.driveFlip).alpha = if (driveFlip) 1f else 0.35f
+        renderPlaylistText()
     }
 
     @Suppress("DEPRECATION")
@@ -1491,6 +1544,7 @@ class MeasurementActivity : AppCompatActivity() {
         val selectConf = (confThreshSpinner.selectedItem?.toString()?.toFloatOrNull()) ?: 0.25f
         displayConfThreshold = selectConf
         val sess = sessionTag()
+        applyMountOffset()
         runActive = true
         inferenceExecutor.execute {
             try {
@@ -1503,6 +1557,7 @@ class MeasurementActivity : AppCompatActivity() {
                 if (!opened) {
                     post("opening camera…")
                     raw = RawSensorCapturer(this); raw.open()
+                    raw.mountOffsetDeg = mountOffsetDeg
                     // Keep the paper's FP16 640px YOLOv8n and select the exact fixed batch for
                     // K=1/3/9. AUTO was validated on X3 Pro as OpenCL GPU delegate V2.
                     post("loading YOLO GPU batches…")

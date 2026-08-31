@@ -65,15 +65,27 @@
                 <Button android:id="@+id/driveRoleA"
                     android:layout_width="0dp" android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:text="ROLE A" android:textSize="18sp" />
+                    android:text="ROLE A" android:textSize="15sp"
+                    android:minWidth="0dp" android:paddingLeft="6dp"
+                    android:paddingRight="6dp" />
                 <Button android:id="@+id/driveRoleB"
                     android:layout_width="0dp" android:layout_weight="1"
                     android:layout_height="wrap_content"
-                    android:text="ROLE B" android:textSize="18sp" />
+                    android:text="ROLE B" android:textSize="15sp"
+                    android:minWidth="0dp" android:paddingLeft="6dp"
+                    android:paddingRight="6dp" />
+                <Button android:id="@+id/driveFlip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="180" android:textSize="13sp"
+                    android:minWidth="0dp" android:paddingLeft="10dp"
+                    android:paddingRight="10dp" />
                 <Button android:id="@+id/driveToLab"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Lab" android:textSize="12sp" />
+                    android:text="Lab" android:textSize="12sp"
+                    android:minWidth="0dp" android:paddingLeft="10dp"
+                    android:paddingRight="10dp" />
             </LinearLayout>
 
             <LinearLayout
@@ -102,20 +114,32 @@
 
             <Button android:id="@+id/driveStart"
                 android:layout_width="match_parent"
+                android:layout_height="132dp"
+                android:layout_marginTop="8dp"
+                android:text="START"
+                android:textSize="30sp"
+                android:textStyle="bold" />
+
+            <!-- The rotation this phone will walk, with the live block marked, so the
+                 upcoming scheme is readable at a glance before and during a drive. -->
+            <TextView android:id="@+id/drivePlaylist"
+                android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
                 android:layout_marginTop="8dp"
-                android:text="START"
-                android:textSize="44sp"
-                android:textStyle="bold" />
+                android:text=""
+                android:textColor="@color/text_readout"
+                android:fontFamily="monospace"
+                android:textSize="15sp"
+                android:lineSpacingMultiplier="1.15" />
 
             <TextView android:id="@+id/driveStatus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="4dp"
                 android:text="ready"
                 android:textColor="@color/text_primary"
-                android:textSize="20sp"
+                android:textSize="18sp"
                 android:maxLines="3" />
         </LinearLayout>
     </FrameLayout>
