@@ -60,10 +60,13 @@ class MeasurementActivity : AppCompatActivity() {
          *  ends with Stop. Storage stays modest (~85 KB per frame, img/ JPEGs only). */
         private const val NO_FRAME_CAP = Int.MAX_VALUE
         /** Neural-AE collection budget. The v2 collector pays 25 physical captures per
-         *  step for the surface, so harvesting is the cheap part — 6 cells/step reaches
-         *  300 samples in ~50 steps (~2.5 min) instead of 100. */
-        private const val NAE_CELLS_PER_STEP = 6
-        private const val NAE_TARGET_SAMPLES = 300
+         *  step for the surface; hists are ~15 ms each, so EVERY captured cell becomes a
+         *  sample (a full exposure bracket per scene instant — nothing thrown away).
+         *  600 samples = 24 steps (~1.2 min); three lighting passes stay under the
+         *  2400-record pool cap. Move the camera during collection: within-step samples
+         *  share one instant, so scene diversity comes from the steps. */
+        private const val NAE_CELLS_PER_STEP = 25
+        private const val NAE_TARGET_SAMPLES = 600
         private const val NAE_MAX_FRAMES = 300
         /** Below this the pool is too small to hold out a meaningful validation split. */
         private const val NAE_MIN_TRAIN = 300

@@ -872,10 +872,15 @@ class MeasurementController(
                 val t0 = now()
                 val nCells = g.nGain * g.nShutter
                 val picks = LinkedHashSet<Int>()
-                picks.add(prevChosenCell)
-                var guard = 0
-                while (picks.size < minOf(cellsPerStep, nCells) && guard++ < 64) {
-                    picks.add(nextInt(nCells))
+                if (cellsPerStep >= nCells) {
+                    // Full harvest: every captured cell becomes a sample.
+                    for (c in 0 until nCells) picks.add(c)
+                } else {
+                    picks.add(prevChosenCell)
+                    var guard = 0
+                    while (picks.size < minOf(cellsPerStep, nCells) && guard++ < 64) {
+                        picks.add(nextInt(nCells))
+                    }
                 }
                 val scores = DoubleArray(nCells) { -1.0 }
                 val detsByCell = HashMap<Int, List<Detection>>()
