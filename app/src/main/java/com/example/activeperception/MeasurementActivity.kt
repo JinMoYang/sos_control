@@ -169,14 +169,18 @@ class MeasurementActivity : AppCompatActivity() {
         ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         confThreshSpinner.setSelection(confChoices.indexOf("0.05").coerceAtLeast(0))
         sessionSpinner = findViewById(R.id.sessionSpinner)
-        val sessionLabels = listOf("Indoor", "Walk", "Veh-Night", "Veh-Day")
+        val sessionLabels = listOf("Indoor", "Out-Day", "Dim", "Out-Night")
         sessionSpinner.adapter = ArrayAdapter(this,
             android.R.layout.simple_spinner_item, sessionLabels
         ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-        // `--es session indoor|walk|vehicle_night|vehicle_day` preselects (adb-driven glass).
-        val sessTags = listOf("indoor", "walk", "vehicle_night", "vehicle_day")
-        intent.getStringExtra("session")?.let { tag ->
-            val i = sessTags.indexOf(tag); if (i >= 0) sessionSpinner.setSelection(i)
+        // "session" extra preselects: indoor|outdoor_day|dim|outdoor_night (plus the older
+        // walk/vehicle_* aliases) for adb-driven starts.
+        val sessTags = listOf("indoor", "outdoor_day", "dim", "outdoor_night")
+        val aliases = mapOf("walk" to "dim",
+            "vehicle_night" to "outdoor_night", "vehicle_day" to "outdoor_day")
+        intent.getStringExtra("session")?.let { raw2 ->
+            val i = sessTags.indexOf(aliases[raw2] ?: raw2)
+            if (i >= 0) sessionSpinner.setSelection(i)
         }
         offloadCheck = findViewById(R.id.offloadCheck)
         offloadUrl = findViewById(R.id.offloadUrl)
@@ -561,7 +565,7 @@ class MeasurementActivity : AppCompatActivity() {
         }.getOrNull()
 
     private fun sessionTag(): String = when (sessionSpinner.selectedItemPosition) {
-        1 -> "walk"; 2 -> "vehicle_night"; 3 -> "vehicle_day"; else -> "indoor"
+        1 -> "outdoor_day"; 2 -> "dim"; 3 -> "outdoor_night"; else -> "indoor"
     }
 
     private fun naeDatasetFile() = java.io.File(getExternalFilesDir(null), "nae_dataset.bin")

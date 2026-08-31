@@ -3540,10 +3540,15 @@ class MeasurementController(
      *  ceiling-analog x residual); residuals are recorded per run. */
     private val v2Sessions = linkedMapOf(
         "indoor" to intArrayOf(100, 200, 400, 800, 1600),
-        "walk" to intArrayOf(200, 400, 800, 1600, 3200),
-        "vehicle_night" to intArrayOf(400, 800, 1600, 3200, 6400),
-        "vehicle_day" to intArrayOf(100, 200, 400, 800, 1600)
+        "outdoor_day" to intArrayOf(100, 200, 400, 800, 1600),
+        "dim" to intArrayOf(200, 400, 800, 1600, 3200),
+        "outdoor_night" to intArrayOf(400, 800, 1600, 3200, 6400)
     )
+    /** Older tags from earlier notes keep working (walk = parking-lot dim, vehicle_* =
+     *  outdoor_*): the session name doubles as the run's condition label in the manifest,
+     *  so the canonical tags are scene-based. */
+    private val v2SessionAliases = mapOf(
+        "walk" to "dim", "vehicle_night" to "outdoor_night", "vehicle_day" to "outdoor_day")
     @Volatile private var v2SessionTag = "indoor"
     /** The v2 lattice as a Grid, so the space-generic baselines (PhysSweep, ShinNM,
      *  NeuralAE snap) can search the SAME space Prop-C lives on. Boost 1: v2 has no
@@ -3556,7 +3561,8 @@ class MeasurementController(
 
     /** Select the session ladder before a run starts (per-run pipelines and manifests
      *  read it once at startPass). Unknown tags keep the current session. */
-    fun setV2Session(tag: String) {
+    fun setV2Session(rawTag: String) {
+        val tag = v2SessionAliases[rawTag] ?: rawTag
         val gains = v2Sessions[tag] ?: return
         v2SessionTag = tag
         v2SpaceCur = Grid(gains = gains,
