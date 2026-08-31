@@ -1089,8 +1089,11 @@ class MeasurementActivity : AppCompatActivity() {
     /** Default rotation: Prop-C alternating with each baseline. Role B shifts the block
      *  index by one, so two phones running the SAME list always have Prop-C on one side
      *  and a baseline on the other, and every baseline is paired on both phones. */
+    /** NAE prep heads the default plan: a NeuralAE block is only meaningful with weights
+     *  trained in the scene about to be driven, and having to remember to add it is how
+     *  that gets skipped. Delete the row when the weights are already good. */
     private fun defaultRows(): MutableList<PlRow> =
-        listOf("ae_phone", "ae_cust", "prop_c", "physsweep", "shin_nm", "nae")
+        listOf("nae_prep", "ae_phone", "ae_cust", "prop_c", "physsweep", "shin_nm", "nae")
             .map { PlRow(it, 10, 4) }
             .toMutableList()
 
@@ -1321,10 +1324,9 @@ class MeasurementActivity : AppCompatActivity() {
         val liveIdx = blockRow(k).second
         val left = (playlistBlockS * 1000L -
             System.currentTimeMillis() % (playlistBlockS * 1000L)) / 1000
-        // Once rows head the list because that is when they run, whatever order they were
-        // added in; the reference is shown on its own line above, not as a peer.
-        val order = rows.indices.sortedBy { if (isOnce(rows[it].method)) 0 else 1 }
-        order.forEach { i ->
+        // The list is the authored order - reordering would be a lie otherwise. Only the
+        // reference is lifted out, onto its own line above.
+        rows.indices.forEach { i ->
             val r = rows[i]
             if (isProp(r.method)) return@forEach
             val live = i == liveIdx
@@ -1347,12 +1349,38 @@ class MeasurementActivity : AppCompatActivity() {
                 typeface = android.graphics.Typeface.MONOSPACE
                 setPadding(4, 10, 4, 10)
                 setOnClickListener { openEditor(i) }
-                setOnLongClickListener {
-                    rows.removeAt(i); saveRows(); vibrate(60); updateDriveUi(); true
-                }
+                setOnLongClickListener { showRowMenu(i); vibrate(40); true }
             }
             driveRowsView.addView(tv)
         }
+    }
+
+    /** Long-press menu: the plan is edited in place instead of only appended to. Moves
+     *  step over the hidden reference row so the list behaves as it looks. */
+    private fun showRowMenu(i: Int) {
+        val visible = rows.indices.filter { !isProp(rows[it].method) }
+        val p = visible.indexOf(i)
+        val items = mutableListOf<String>()
+        val acts = mutableListOf<() -> Unit>()
+        if (p > 0) {
+            items += "Move up"
+            acts += { java.util.Collections.swap(rows, i, visible[p - 1]) }
+        }
+        if (p in 0 until visible.size - 1) {
+            items += "Move down"
+            acts += { java.util.Collections.swap(rows, i, visible[p + 1]) }
+        }
+        items += "Insert copy above"
+        acts += { rows.add(i, rows[i].copy()) }
+        items += "Delete"
+        acts += { rows.removeAt(i) }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(rowLabel(rows[i]))
+            .setItems(items.toTypedArray()) { _, which ->
+                acts[which](); saveRows(); updateDriveUi()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     /** The structure in one quiet line: what runs opposite what, how long a full cycle
