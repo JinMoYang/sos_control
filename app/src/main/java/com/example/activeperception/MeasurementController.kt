@@ -1424,8 +1424,12 @@ class MeasurementController(
      *  128× span is far too large to confuse with noise, and std should scale too, since
      *  analog gain amplifies read noise along with signal. Where mean stops scaling is the
      *  analog ceiling — beyond it the HAL is applying digital gain that bypasses RAW. */
-    fun runIsoDiag(exposureUs: Int = 16000, framesPerIso: Int = 5,
-                   isoList: List<Int> = listOf(25, 100, 400, 800, 1600, 3200),
+    fun runIsoDiag(exposureUs: Int = 64000, framesPerIso: Int = 5,
+                   // Fine around the declared analog ceiling (S26U reports 1200), so the
+                   // response knee is measured rather than trusted. 64 ms lifts a dim-room
+                   // signal off the black floor where ratio estimates go sub-linear.
+                   isoList: List<Int> = listOf(
+                       100, 200, 400, 600, 800, 1000, 1200, 1400, 1600, 2000, 2400, 3200),
                    onStatus: (String) -> Unit) {
         writeManifest("iso_diag", isGtReference = false, raw.captureWidth, raw.captureHeight)
         logger.csv("iso_diag", listOf("iso_req", "iso_applied", "exp_req_us", "exp_applied_us",
@@ -3899,10 +3903,15 @@ class MeasurementController(
      *  phone AE it is fully determined by the brightness sequence, so runs are reproducible. */
     /** Custom AE clamped to the device's real sensitivity range: a request past the range
      *  is never metadata-approved, so the capture times out ("obtained 0/N ... ISO1600
-     *  failures=0"). The design cap of 1600 still applies where the HAL allows more. */
-    private fun customAeForDevice() = CustomAeBrightness(
-        isoMin = maxOf(100, raw.sensorIsoMin),
-        isoMax = minOf(1600, raw.sensorIsoMax))
+     *  failures=0"). Also capped at the analog ceiling when the HAL reports one — the S26U
+     *  fine sweep measured RAW response linear to exactly ISO 1200 and DEAD above it, so
+     *  requesting more only mislabels the exposure metadata without changing the pixels. */
+    private fun customAeForDevice(): CustomAeBrightness {
+        val rawCeiling = if (raw.maxAnalogIso > 0) raw.maxAnalogIso else raw.sensorIsoMax
+        return CustomAeBrightness(
+            isoMin = maxOf(100, raw.sensorIsoMin),
+            isoMax = minOf(1600, rawCeiling))
+    }
 
     private class CustomAeBrightness(
         val targetRatio: Double = 0.40,    // bright but short of clipping
