@@ -93,6 +93,13 @@ class MeasurementActivity : AppCompatActivity() {
     private lateinit var proposedSettings: LinearLayout
     private lateinit var confThreshSpinner: Spinner
     private lateinit var sessionSpinner: Spinner
+    private lateinit var drivePanel: LinearLayout
+    private lateinit var driveStart: Button
+    private lateinit var driveStatus: TextView
+    private val prefs by lazy { getSharedPreferences("sos_ui", MODE_PRIVATE) }
+    private var driveMode = false
+    private var driveRole = "A"
+    private var driveShownAtMs = 0L
     private lateinit var offloadCheck: CheckBox
     private lateinit var offloadUrl: EditText
     private lateinit var offloadRegime: Spinner
@@ -361,6 +368,7 @@ class MeasurementActivity : AppCompatActivity() {
             }
         }
         else configurePhoneProfileUi()
+        wireDriveMode()
         // Start is the safest useful default: one tap launches the default Proposed mode.
         if (rayNeoTouchpad) btnStart.post { btnStart.requestFocus() }
 
@@ -999,6 +1007,132 @@ class MeasurementActivity : AppCompatActivity() {
         return true
     }
 
+    // ---------- drive mode ----------
+
+    /** Baselines that rotate opposite Prop-C. Role A runs Prop-C on even blocks, role B on
+     *  odd ones, so each baseline is paired with Prop-C once on EACH phone per cycle and
+     *  device bias cancels. Ten blocks x 120 s = a 20-minute cycle. */
+    private val driveBaselines = listOf("ae_cust", "ae_phone", "shin_nm", "physsweep", "nae")
+    private fun rolePlaylist(role: String): List<String> =
+        if (role == "B") driveBaselines.flatMap { listOf(it, "prop_c") }
+        else driveBaselines.flatMap { listOf("prop_c", it) }
+
+    /** Drive mode exists because the lab UI is unusable in a car: it replaces the controls
+     *  with arm's-length targets, remembers everything across launches (so the car-side
+     *  interaction is ONE tap), and reports block changes by vibration so the screen never
+     *  has to be looked at. Stop is a long-press — a brushed knee must not end a run. */
+    private fun wireDriveMode() {
+        drivePanel = findViewById(R.id.drivePanel)
+        driveStart = findViewById(R.id.driveStart)
+        driveStatus = findViewById(R.id.driveStatus)
+        // The lab controls carry the window insets; in drive mode they are hidden, so the
+        // panel takes over keeping its status line clear of the navigation bar.
+        val dpBase = intArrayOf(drivePanel.paddingLeft, drivePanel.paddingTop,
+            drivePanel.paddingRight, drivePanel.paddingBottom)
+        ViewCompat.setOnApplyWindowInsetsListener(drivePanel) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(dpBase[0] + bars.left, dpBase[1] + bars.top,
+                dpBase[2] + bars.right, dpBase[3] + bars.bottom)
+            insets
+        }
+        driveRole = prefs.getString("role", "A") ?: "A"
+        sessionSpinner.setSelection(prefs.getInt("session_idx", 0))
+        // Offload survives launches too: in the car there is no chance to retype a URL.
+        prefs.getString("offload_url", null)?.let { offloadUrl.setText(it) }
+        offloadCheck.isChecked = prefs.getBoolean("offload_on", false)
+        offloadCheck.setOnCheckedChangeListener { _, on ->
+            prefs.edit().putBoolean("offload_on", on)
+                .putString("offload_url", offloadUrl.text.toString()).apply()
+        }
+        findViewById<android.widget.RadioButton>(
+            when (prefs.getInt("period", 10)) {
+                5 -> R.id.period5; 20 -> R.id.period20; else -> R.id.period10
+            }).isChecked = true
+        findViewById<Button>(R.id.driveRoleA).setOnClickListener { setDriveRole("A") }
+        findViewById<Button>(R.id.driveRoleB).setOnClickListener { setDriveRole("B") }
+        val sessBtns = listOf(R.id.driveSessIndoor to 0, R.id.driveSessDay to 1,
+            R.id.driveSessDim to 2, R.id.driveSessNight to 3)
+        for ((id, idx) in sessBtns) findViewById<Button>(id).setOnClickListener {
+            sessionSpinner.setSelection(idx)
+            prefs.edit().putInt("session_idx", idx).apply()
+            updateDriveUi()
+        }
+        findViewById<Button>(R.id.driveToLab).setOnClickListener { setDriveMode(false) }
+        driveStart.setOnClickListener {
+            // Entering drive mode reveals this button under the finger that was still on
+            // the DRIVE MODE control, so the first moments after the switch are deaf.
+            if (SystemClock.elapsedRealtime() - driveShownAtMs < 700) return@setOnClickListener
+            if (playlistActive || runActive) post("hold to stop")
+            else startDrivePlaylist()
+        }
+        driveStart.setOnLongClickListener {
+            if (playlistActive || runActive) { vibrate(400); stopMeasurement() }
+            true
+        }
+        // A "Drive" entry lives in the lab controls; on the glass the touchpad profile owns
+        // the screen, so drive mode is phone-only.
+        if (!rayNeoTouchpad) {
+            val toDrive = Button(this).apply {
+                text = "DRIVE MODE"
+                textSize = 16f
+                setOnClickListener { setDriveMode(true) }
+            }
+            controlsInner.addView(toDrive, 0)
+            if (prefs.getBoolean("drive_mode", false)) setDriveMode(true) else updateDriveUi()
+        }
+    }
+
+    private fun setDriveRole(role: String) {
+        driveRole = role
+        prefs.edit().putString("role", role).apply()
+        updateDriveUi()
+    }
+
+    private fun setDriveMode(on: Boolean) {
+        driveMode = on
+        if (on) driveShownAtMs = SystemClock.elapsedRealtime()
+        prefs.edit().putBoolean("drive_mode", on).apply()
+        drivePanel.visibility = if (on) View.VISIBLE else View.GONE
+        controlsScroll.visibility = if (on) View.GONE else View.VISIBLE
+        updateDriveUi()
+    }
+
+    private fun startDrivePlaylist() {
+        val period = when (periodGroup.checkedRadioButtonId) {
+            R.id.period10 -> 10; R.id.period20 -> 20; else -> 5
+        }
+        prefs.edit().putInt("period", period).apply()
+        playlist = rolePlaylist(driveRole)
+        playlistBlockS = 120
+        playlistActive = true
+        vibrate(120); playlistHandler.postDelayed({ vibrate(120) }, 220)
+        startPlaylistBlock()
+        updateDriveUi()
+    }
+
+    private fun updateDriveUi() {
+        if (!::drivePanel.isInitialized) return
+        val running = playlistActive || runActive
+        driveStart.text = if (running) "STOP\n(hold)" else "START"
+        findViewById<Button>(R.id.driveRoleA).alpha = if (driveRole == "A") 1f else 0.35f
+        findViewById<Button>(R.id.driveRoleB).alpha = if (driveRole == "B") 1f else 0.35f
+        val si = sessionSpinner.selectedItemPosition
+        listOf(R.id.driveSessIndoor, R.id.driveSessDay, R.id.driveSessDim, R.id.driveSessNight)
+            .forEachIndexed { i, id -> findViewById<Button>(id).alpha = if (i == si) 1f else 0.35f }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun vibrate(ms: Long) {
+        val effect = android.os.VibrationEffect.createOneShot(
+            ms, android.os.VibrationEffect.DEFAULT_AMPLITUDE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vm = getSystemService(android.os.VibratorManager::class.java)
+            vm?.defaultVibrator?.vibrate(effect)
+        } else {
+            (getSystemService(VIBRATOR_SERVICE) as? android.os.Vibrator)?.vibrate(effect)
+        }
+    }
+
     // ---------- driving playlist ----------
 
     private var playlist: List<String> = emptyList()
@@ -1043,8 +1177,11 @@ class MeasurementActivity : AppCompatActivity() {
         }
         val idx = ((now / 1000 / playlistBlockS) % playlist.size).toInt()
         val cmd = playlist[idx]
-        post("playlist block $idx: $cmd (${remain / 1000}s left)")
+        post("[$driveRole] block $idx: $cmd (${remain / 1000}s)")
+        // One buzz per scheme change: the driver never needs to look at the screen.
+        vibrate(150)
         launchRunnerCommand(cmd)
+        updateDriveUi()
         playlistHandler.postDelayed({
             if (playlistActive && runActive) stopMeasurement(userInitiated = false)
         }, remain)
@@ -1056,6 +1193,7 @@ class MeasurementActivity : AppCompatActivity() {
             playlistHandler.removeCallbacksAndMessages(null)
             post("playlist cancelled")
         }
+        updateDriveUi()
         if (cancelRotationSession()) {
             runOnUiThread { overlay.clear(); cellText.text = "—" }
             return
@@ -1071,6 +1209,16 @@ class MeasurementActivity : AppCompatActivity() {
 
     /** DPAD-style input is emitted by some RayNeo firmware and is also useful for testing. */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Volume keys start/stop in drive mode: findable by touch in a car mount, so the
+        // experiment can be driven without locating a button on screen.
+        if (driveMode && event.keyCode in intArrayOf(
+                KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_UP)) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                if (playlistActive || runActive) { vibrate(400); stopMeasurement() }
+                else startDrivePlaylist()
+            }
+            return true
+        }
         val direction = when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_PAGE_DOWN -> 1
@@ -1235,7 +1383,10 @@ class MeasurementActivity : AppCompatActivity() {
     private fun Int.floorMod(size: Int): Int = ((this % size) + size) % size
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private fun post(s: String) = runOnUiThread { status.text = s }
+    private fun post(s: String) = runOnUiThread {
+        status.text = s
+        if (driveMode) driveStatus.text = s
+    }
 
     /** Preview plus non-blocking advisory-cloud escalation from cross-exposure consistency. */
     private fun onFrameWithOffload(bmp: Bitmap, dets: List<Detection>, iso: Int, expUs: Int) {
@@ -1389,8 +1540,9 @@ class MeasurementActivity : AppCompatActivity() {
                 runActive = false
                 // Playlist continuation: the next block starts once this run's worker has
                 // fully unwound (camera and GPU stay open, so the gap is a second or two).
-                if (playlistActive) runOnUiThread {
-                    playlistHandler.postDelayed({ startPlaylistBlock() }, 1500)
+                runOnUiThread {
+                    updateDriveUi()
+                    if (playlistActive) playlistHandler.postDelayed({ startPlaylistBlock() }, 1500)
                 }
             }
         }

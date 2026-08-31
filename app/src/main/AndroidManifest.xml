@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Rotation Start reuses the diagnostic app's ~200-400 Hz quaternion/gyro trigger. -->
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+    <!-- Drive mode reports scheme changes by vibration so the driver never looks down. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Optional: with All files access granted (phone workflow), runs land in
          Documents/sos where a file manager can see them. Without it the app still
          records into its private directory — RayNeo never grants this. -->

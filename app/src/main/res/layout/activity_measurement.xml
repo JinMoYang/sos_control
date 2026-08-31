@@ -44,6 +44,80 @@
             android:textColor="@color/text_readout"
             android:fontFamily="monospace"
             android:layout_gravity="top|end" />
+
+        <!-- Drive mode: everything reachable at arm's length in a car mount. Sits over the
+             preview (kept faintly visible for aiming) and replaces the lab controls, which
+             are hidden while this is up. -->
+        <LinearLayout
+            android:id="@+id/drivePanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:background="#D0000000"
+            android:padding="12dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <Button android:id="@+id/driveRoleA"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="ROLE A" android:textSize="18sp" />
+                <Button android:id="@+id/driveRoleB"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="ROLE B" android:textSize="18sp" />
+                <Button android:id="@+id/driveToLab"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Lab" android:textSize="12sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="6dp">
+
+                <Button android:id="@+id/driveSessIndoor"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="Indoor" android:textSize="13sp" />
+                <Button android:id="@+id/driveSessDay"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="Day" android:textSize="13sp" />
+                <Button android:id="@+id/driveSessDim"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="Dim" android:textSize="13sp" />
+                <Button android:id="@+id/driveSessNight"
+                    android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:text="Night" android:textSize="13sp" />
+            </LinearLayout>
+
+            <Button android:id="@+id/driveStart"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:layout_marginTop="8dp"
+                android:text="START"
+                android:textSize="44sp"
+                android:textStyle="bold" />
+
+            <TextView android:id="@+id/driveStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="ready"
+                android:textColor="@color/text_primary"
+                android:textSize="20sp"
+                android:maxLines="3" />
+        </LinearLayout>
     </FrameLayout>
 
     <!-- Scrollable because the stacked controls exceed the available height in landscape.
