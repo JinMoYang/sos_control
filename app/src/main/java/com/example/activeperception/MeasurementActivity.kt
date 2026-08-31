@@ -1306,13 +1306,27 @@ class MeasurementActivity : AppCompatActivity() {
             textSize = 15f
             setTextColor(getColor(R.color.text_primary))
             typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(4, 2, 4, 12)
+            setPadding(4, 2, 4, 2)
+        })
+        // Every baseline is paired against Prop-C twice per cycle - once on each phone, so
+        // device bias cancels - which makes the cycle length the real design knob: the
+        // repetitions a drive yields are its duration divided by this.
+        val nb = baselineRows().size
+        driveRowsView.addView(TextView(this).apply {
+            val cycleMin = 2 * nb * playlistBlockS / 60.0
+            text = if (nb == 0) "no baselines - add rows"
+            else "cycle ${2 * nb} blocks = ${"%.1f".format(cycleMin)} min  ·  " +
+                "each baseline 2x${playlistBlockS}s per cycle"
+            textSize = 13f
+            setTextColor(getColor(R.color.text_readout))
+            typeface = android.graphics.Typeface.MONOSPACE
+            setPadding(4, 0, 4, 12)
         })
         rows.forEachIndexed { i, r ->
             val live = i == liveIdx
             val tv = TextView(this).apply {
                 text = (if (live) "▶ " else "   ") + rowLabel(r) +
-                    (if (isProp(r.method)) "   (every other block)" else "")
+                    (if (isProp(r.method)) "   (paired with every baseline)" else "")
                 textSize = 16f
                 setTextColor(getColor(
                     if (live) R.color.text_primary else R.color.text_readout))
