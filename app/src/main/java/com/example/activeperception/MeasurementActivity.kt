@@ -1126,13 +1126,6 @@ class MeasurementActivity : AppCompatActivity() {
         return b to rows.indexOf(b)
     }
 
-    /** What the paired phone runs in block [k] — the complement of [blockRow]. */
-    private fun otherRow(k: Long): PlRow {
-        val bl = baselineRows()
-        if (bl.isEmpty()) return propRow()
-        return if (isPropBlock(k)) bl[((k / 2) % bl.size).toInt()] else propRow()
-    }
-
     private fun loadRows() {
         val raw2 = prefs.getString("rows", null)
         rows = if (raw2.isNullOrBlank()) defaultRows()
@@ -1378,14 +1371,11 @@ class MeasurementActivity : AppCompatActivity() {
                         isOnce(r.method) && prepStage == 2 -> "   (training…)"
                         isOnce(r.method) && prepDone -> "   (done)"
                         isOnce(r.method) -> "   (once, at START)"
-                        // "other:" names the partner phone's block explicitly - the bare
-                        // arrow read as if one row ran two things. The block number is
-                        // printed while running so two phones can be compared at a glance:
-                        // same number means still in step.
-                        live && platformTag() == "car" ->
-                            (if (playlistActive) "   blk $k" else "") + "   (" + left + "s)" +
-                                "   other: " + rowLabel(otherRow(k))
-                        live -> (if (playlistActive) "   blk $k" else "") + "   (" + left + "s)"
+                        // Only while running, and only what this phone is doing: the block
+                        // number (two phones in step show the same one) and the seconds
+                        // left before the next scheme. Idle, a countdown would be counting
+                        // toward nothing.
+                        live && playlistActive -> "   blk $k   (" + left + "s)"
                         else -> ""
                     }
                 textSize = 16f
