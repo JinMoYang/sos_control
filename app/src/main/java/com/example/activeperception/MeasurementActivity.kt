@@ -1378,11 +1378,13 @@ class MeasurementActivity : AppCompatActivity() {
                         isOnce(r.method) && prepStage == 2 -> "   (training…)"
                         isOnce(r.method) && prepDone -> "   (done)"
                         isOnce(r.method) -> "   (once, at START)"
-                        // The block number is printed while running so two phones can be
-                        // compared at a glance: same number means still in step.
+                        // "other:" names the partner phone's block explicitly - the bare
+                        // arrow read as if one row ran two things. The block number is
+                        // printed while running so two phones can be compared at a glance:
+                        // same number means still in step.
                         live && platformTag() == "car" ->
-                            "   <-> " + rowLabel(otherRow(k)) +
-                                (if (playlistActive) "   blk $k" else "") + "   (" + left + "s)"
+                            (if (playlistActive) "   blk $k" else "") + "   (" + left + "s)" +
+                                "   other: " + rowLabel(otherRow(k))
                         live -> (if (playlistActive) "   blk $k" else "") + "   (" + left + "s)"
                         else -> ""
                     }
