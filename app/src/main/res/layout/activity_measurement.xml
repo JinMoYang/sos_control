@@ -153,6 +153,16 @@
                     android:paddingRight="10dp" />
             </LinearLayout>
 
+            <!-- One quiet caption for the structure (who runs opposite what, how long a
+                 cycle takes), so the row list stays a plain list. -->
+            <TextView android:id="@+id/driveCaption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text=""
+                android:textColor="@color/text_hint"
+                android:textSize="12sp" />
+
             <Button android:id="@+id/driveStart"
                 android:layout_width="match_parent"
                 android:layout_height="132dp"

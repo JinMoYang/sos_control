@@ -1316,49 +1316,13 @@ class MeasurementActivity : AppCompatActivity() {
         val liveIdx = blockRow(k).second
         val left = (playlistBlockS * 1000L -
             System.currentTimeMillis() % (playlistBlockS * 1000L)) / 1000
-        driveRowsView.addView(TextView(this).apply {
-            // The pairing is dynamic now, so it is stated once for the live block: two
-            // phones left on the same role read prop_c facing prop_c here.
-            text = "now  ${rowLabel(blockRow(k).first)}  ⟷  ${rowLabel(otherRow(k))}" +
-                "   (${left}s)"
-            textSize = 15f
-            setTextColor(getColor(R.color.text_primary))
-            typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(4, 2, 4, 2)
-        })
-        // Every baseline is paired against Prop-C twice per cycle - once on each phone, so
-        // device bias cancels - which makes the cycle length the real design knob: the
-        // repetitions a drive yields are its duration divided by this.
-        if (naePrepEnabled) driveRowsView.addView(TextView(this).apply {
-            text = (if (prepStage > 0) "▶ " else "   ") + "NAE prep: collect + train" +
-                when {
-                    prepStage == 1 -> "   (collecting…)"
-                    prepStage == 2 -> "   (training…)"
-                    prepDone -> "   (done)"
-                    else -> "   (once, at START)"
-                }
-            textSize = 15f
-            setTextColor(getColor(
-                if (prepStage > 0) R.color.text_primary else R.color.text_readout))
-            typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(4, 4, 4, 4)
-        })
-        val nb = baselineRows().size
-        driveRowsView.addView(TextView(this).apply {
-            val cycleMin = 2 * nb * playlistBlockS / 60.0
-            text = if (nb == 0) "no baselines - add rows"
-            else "cycle ${2 * nb} blocks = ${"%.1f".format(cycleMin)} min  ·  " +
-                "each baseline 2x${playlistBlockS}s per cycle"
-            textSize = 13f
-            setTextColor(getColor(R.color.text_readout))
-            typeface = android.graphics.Typeface.MONOSPACE
-            setPadding(4, 0, 4, 12)
-        })
         rows.forEachIndexed { i, r ->
             val live = i == liveIdx
             val tv = TextView(this).apply {
-                text = (if (live) "▶ " else "   ") + rowLabel(r) +
-                    (if (isProp(r.method)) "   (paired with every baseline)" else "")
+                // Only the live row carries state - what it faces on the other phone and
+                // the seconds left - so the rest stays a plain list.
+                text = (if (live) "> " else "   ") + rowLabel(r) +
+                    (if (live) "   <-> " + rowLabel(otherRow(k)) + "   (" + left + "s)" else "")
                 textSize = 16f
                 setTextColor(getColor(
                     if (live) R.color.text_primary else R.color.text_readout))
@@ -1371,6 +1335,25 @@ class MeasurementActivity : AppCompatActivity() {
             }
             driveRowsView.addView(tv)
         }
+    }
+
+    /** The structure in one quiet line: what runs opposite what, how long a full cycle
+     *  takes (the repetitions a drive yields are its duration divided by this), and
+     *  whether prep runs first. Keeping it out of the list keeps the list a list. */
+    private fun renderCaption() {
+        val nb = baselineRows().size
+        val cap = findViewById<TextView>(R.id.driveCaption)
+        if (nb == 0) { cap.text = "no baselines - add a row"; return }
+        val cycleMin = 2 * nb * playlistBlockS / 60.0
+        val prep = when {
+            !naePrepEnabled -> ""
+            prepStage == 1 -> "  |  NAE prep: collecting"
+            prepStage == 2 -> "  |  NAE prep: training"
+            prepDone -> "  |  NAE prep done"
+            else -> "  |  NAE prep first"
+        }
+        cap.text = "prop_c every other block  |  cycle " + (2 * nb) + " blocks = " +
+            "%.0f".format(cycleMin) + " min" + prep
     }
 
     private fun startDrivePlaylist() {
@@ -1402,6 +1385,7 @@ class MeasurementActivity : AppCompatActivity() {
         val si = sessionSpinner.selectedItemPosition
         listOf(R.id.driveSessIndoor, R.id.driveSessDay, R.id.driveSessDim, R.id.driveSessNight)
             .forEachIndexed { i, id -> findViewById<Button>(id).alpha = if (i == si) 1f else 0.35f }
+        renderCaption()
         renderRows()
     }
 
