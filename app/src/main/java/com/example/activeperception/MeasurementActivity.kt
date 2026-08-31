@@ -1322,10 +1322,14 @@ class MeasurementActivity : AppCompatActivity() {
         if (::raw.isInitialized) raw.mountOffsetDeg = mountOffsetDeg
     }
 
-    /** Wall-clock block number — the same integer on both phones, which is what lets them
-     *  pair with no link and lets a run be matched to its partner offline. */
-    private fun currentBlockIndex(now: Long = System.currentTimeMillis()): Long =
-        now / 1000 / playlistBlockS
+    /** Block index counts from START, so a drive walks the list from the top exactly as
+     *  written. The two phones are aligned by starting them together — the operator's job,
+     *  and a predictable one — while the BOUNDARIES stay on wall-clock multiples so the
+     *  pair never drifts apart over a long drive. */
+    private var blockCounter = 0L
+    private var liveBlockIdx = 0L
+
+    private fun currentBlockIndex(): Long = liveBlockIdx
 
     /** Rebuilds the row list: the live block is marked, tap edits, long-press deletes. */
     private fun renderRows() {
@@ -1411,16 +1415,15 @@ class MeasurementActivity : AppCompatActivity() {
         val cap = findViewById<TextView>(R.id.driveCaption)
         if (nb == 0) { cap.text = "no rotating rows - add one"; return }
         val cycleMin = 2 * nb * playlistBlockS / 60.0
-        // The list fixes the cycle ORDER; which row a drive starts on is the wall clock's
-        // call, because that is what keeps the two phones paired.
         cap.text = "cycle " + (2 * nb) + " blocks = " + "%.0f".format(cycleMin) +
-            " min  |  each row 2x" + playlistBlockS + "s  |  clock picks the entry point"
+            " min  |  each row 2x" + playlistBlockS + "s  |  starts at the top"
     }
 
     private fun startDrivePlaylist() {
         if (rows.isEmpty()) { post("playlist is empty — add a row"); return }
         commitBlockSec()
         playlistActive = true
+        blockCounter = 0; liveBlockIdx = 0
         vibrate(120); playlistHandler.postDelayed({ vibrate(120) }, 220)
         if (onceRows().isNotEmpty() && !prepDone) {
             // No boundary stop is scheduled for a once row: the collector ends itself at
@@ -1503,7 +1506,9 @@ class MeasurementActivity : AppCompatActivity() {
             return
         }
         if (rows.isEmpty()) { playlistActive = false; post("playlist is empty"); return }
-        val k = currentBlockIndex(now)
+        val k = blockCounter
+        liveBlockIdx = k
+        blockCounter = k + 1
         val row = blockRow(k).first
         post("[$driveRole] block $k: ${row.method} (${remain / 1000}s)")
         // One buzz per scheme change: the driver never needs to look at the screen.
