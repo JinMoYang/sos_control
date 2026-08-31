@@ -541,14 +541,19 @@ class MeasurementActivity : AppCompatActivity() {
         }
     }
 
-    /** Trains on the whole pool and writes the weights where [loadNaeWeights] looks first.
+    /** Trains on the pool and writes the weights where [loadNaeWeights] looks first.
      *  No camera involved; the GPU worker just serializes it against runs, and [runActive]
-     *  keeps Start/Collect refusals honest while an epoch loop is busy. */
+     *  keeps Start/Collect refusals honest while an epoch loop is busy.
+     *
+     *  Incremental-by-collection semantics: a successful training ARCHIVES the pool
+     *  (renamed nae_dataset_trained_<ts>.bin), so the next Train sees only samples
+     *  collected after this one. Nothing is deleted — archives stay in the files dir. */
     private fun trainNaePool() {
         if (runActive) { post("busy — stop first"); return }
         val n = NaeDataset.count(naeDatasetFile())
         if (n < NAE_MIN_TRAIN) {
-            post("NAE train: pool has $n samples, need $NAE_MIN_TRAIN — Collect first")
+            post("NAE train: pool has $n new samples since the last training, " +
+                "need $NAE_MIN_TRAIN — Collect first")
             return
         }
         runActive = true
@@ -560,7 +565,12 @@ class MeasurementActivity : AppCompatActivity() {
                     if (ep % 5 == 0) post("NAE train: epoch $ep loss ${"%.4f".format(tr)} val ${"%.4f".format(va)}")
                 }
                 java.io.File(getExternalFilesDir(null), "nae_hist_scalar_3x3.bin").writeBytes(bin)
-                post("NAE ready: trained on $n samples — select NeuralAE and Start")
+                val archived = java.io.File(getExternalFilesDir(null),
+                    "nae_dataset_trained_${System.currentTimeMillis()}.bin")
+                val poolArchived = naeDatasetFile().renameTo(archived)
+                post("NAE ready: trained on $n samples" +
+                    (if (poolArchived) " — pool archived; next Train uses only new collects"
+                     else " — pool archive FAILED, next Train would reuse these samples"))
             } catch (e: Exception) {
                 post("NAE train failed: ${e.message}")
             } finally {
