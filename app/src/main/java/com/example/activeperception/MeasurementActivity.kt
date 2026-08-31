@@ -1256,6 +1256,9 @@ class MeasurementActivity : AppCompatActivity() {
         findViewById<View>(R.id.editorBar).visibility = View.VISIBLE
         findViewById<Button>(R.id.editorSave).visibility =
             if (index == -2) View.GONE else View.VISIBLE
+        // RUN NOW in the bar is exactly what the legacy Start button did, so the old
+        // Start/Stop row would be a second copy of the same control.
+        (btnStart.parent as View).visibility = View.GONE
         setDriveMode(false)
         controlsScroll.scrollTo(0, 0)
     }
@@ -1263,6 +1266,7 @@ class MeasurementActivity : AppCompatActivity() {
     private fun closeEditor() {
         editingIndex = -3
         findViewById<View>(R.id.editorBar).visibility = View.GONE
+        (btnStart.parent as View).visibility = View.VISIBLE
         setDriveMode(true)
     }
 
@@ -1373,7 +1377,10 @@ class MeasurementActivity : AppCompatActivity() {
                         isOnce(r.method) && prepStage == 2 -> "   (training…)"
                         isOnce(r.method) && prepDone -> "   (done)"
                         isOnce(r.method) -> "   (once, at START)"
-                        live -> "   <-> " + rowLabel(otherRow(k)) + "   (" + left + "s)"
+                        // The partner column only exists when a partner does.
+                        live && platformTag() == "car" ->
+                            "   <-> " + rowLabel(otherRow(k)) + "   (" + left + "s)"
+                        live -> "   (" + left + "s)"
                         else -> ""
                     }
                 textSize = 16f
@@ -1461,6 +1468,11 @@ class MeasurementActivity : AppCompatActivity() {
         if (!::drivePanel.isInitialized) return
         val running = playlistActive || runActive
         driveStart.text = if (running) "STOP\n(hold)" else "START"
+        // Role only means something with two phones side by side, which is the car rig;
+        // on the limo and the glass there is nothing to pair with, so it is not offered.
+        val paired = platformTag() == "car"
+        findViewById<Button>(R.id.driveRoleA).visibility =
+            if (paired) View.VISIBLE else View.GONE
         findViewById<Button>(R.id.driveRoleA).text =
             if (driveRole == "L") "LEFT · prop odd" else "RIGHT · prop even"
         findViewById<Button>(R.id.driveFlip).alpha = if (driveFlip) 1f else 0.35f
