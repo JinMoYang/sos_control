@@ -244,7 +244,10 @@ class MeasurementActivity : AppCompatActivity() {
             start("ab_bench") { mc!!.runAbBench(::post) }
         }
         findViewById<Button>(R.id.btnIsoDiag).setOnClickListener {
-            start("iso_diag") { mc!!.runIsoDiag(onStatus = ::post) }
+            // `--ez v2_diag true` repurposes the button as the v2 lattice reachability audit.
+            if (intent.getBooleanExtra("v2_diag", false))
+                start("v2_diag") { mc!!.runV2LatticeDiag(::post) }
+            else start("iso_diag") { mc!!.runIsoDiag(onStatus = ::post) }
         }
         findViewById<Button>(R.id.btnExp21).setOnClickListener {
             start("exp2_1") { mc!!.runExp21DirectTensor(::post) }

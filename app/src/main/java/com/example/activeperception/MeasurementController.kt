@@ -3358,6 +3358,52 @@ class MeasurementController(
     private val v2ShutterRungsUs = intArrayOf(2083, 4167, 8333, 16667, 33333)
     private fun v2Cell(gi: Int, sj: Int) = gi * v2ShutterRungsUs.size + sj
 
+    /** Reachability audit of the v2 lattice: one capture per (rung, shutter) plus a
+     *  4-frame probe burst per shutter, logging requested vs applied sensor state. A cell
+     *  whose metadata never approves shows n_frames=0 / ok=0 instead of killing the run. */
+    fun runV2LatticeDiag(onStatus: (String) -> Unit) {
+        val analogCeil = if (raw.maxAnalogIso > 0) raw.maxAnalogIso else raw.sensorIsoMax
+        startPass("v2_lattice_diag", isGtReference = false, withFrames = false,
+            methodParams = JSONObject().put("analog_ceiling", analogCeil)
+                .put("gain_rungs", JSONArray(v2GainRungs.toList()))
+                .put("shutter_rungs_us", JSONArray(v2ShutterRungsUs.toList())))
+        logger.csv("v2diag", listOf("kind", "gi", "sj", "nominal_iso", "iso_req",
+            "iso_applied", "exp_req_us", "exp_applied_us", "frame_duration_ns",
+            "n_frames", "ok"))
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
+        try {
+            for (sj in v2ShutterRungsUs.indices) for (gi in v2GainRungs.indices) {
+                if (!running) return
+                val rung = v2GainRungs[gi]; val phys = minOf(rung, analogCeil)
+                val exp = v2ShutterRungsUs[sj]
+                val got = runCatching { raw.captureFast(exp, phys, 1) }.getOrNull()
+                val m = raw.lastMeta.firstOrNull()
+                logger.row("v2diag", listOf("single", gi, sj, rung, phys,
+                    m?.appliedIso ?: -1, exp, m?.appliedExpUs ?: -1,
+                    m?.frameDurationNs ?: -1, got?.size ?: 0,
+                    if (!got.isNullOrEmpty()) 1 else 0))
+                onStatus("v2diag g$gi s$sj: iso $phys -> ${m?.appliedIso}  " +
+                    "exp $exp -> ${m?.appliedExpUs}us")
+            }
+            for (sj in v2ShutterRungsUs.indices) {
+                if (!running) return
+                val exp = v2ShutterRungsUs[sj]
+                val got = runCatching { raw.captureFast(exp, 400, 4) }.getOrNull()
+                val m = raw.lastMeta.firstOrNull()
+                logger.row("v2diag", listOf("burst4", -1, sj, 400, 400,
+                    m?.appliedIso ?: -1, exp, m?.appliedExpUs ?: -1,
+                    m?.frameDurationNs ?: -1, got?.size ?: 0,
+                    if (got != null && got.size == 4) 1 else 0))
+                onStatus("v2diag burst4 s$sj: ${got?.size ?: 0}/4 frames")
+            }
+            onStatus("v2 lattice diag done")
+        } finally {
+            runCatching { raw.stopFastCapture() }
+            endPass()
+        }
+    }
+
     /**
      * Continuity design: the SELECTED candidate becomes the next frame's physical base -
      * the same rule the shutter axis always followed, extended to gain. The original
