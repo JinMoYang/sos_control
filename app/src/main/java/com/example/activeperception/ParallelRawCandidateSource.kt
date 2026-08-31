@@ -381,6 +381,55 @@ class ParallelRawCandidateSource(
     }
 
     /**
+     * Continuous-v2 formation: one frame, explicit per-lane digital gain ratios, no grid
+     * coupling. The ratios are relative to the frame AS CAPTURED (its physical ISO), so
+     * the caller owns the base-rung bookkeeping. Same fused native fill as
+     * [formFusedNativeTensor] with burst count pinned to 1.
+     */
+    fun formExplicitGainsTensor(
+        frame: RawFrame, gainRatios: DoubleArray, imgsz: Int = 640
+    ): Exp21TensorResult {
+        require(gainRatios.isNotEmpty())
+        val started = System.nanoTime()
+        val count = gainRatios.size
+        val floatsPerFrame = imgsz * imgsz * 3
+        val input = exp21TensorBuffers.computeIfAbsent(count) {
+            ByteBuffer.allocateDirect(count * floatsPerFrame * 4).order(ByteOrder.nativeOrder())
+        }
+        val lut = lutFor(frame.maxDn)
+        NativeTensorPreprocessor.clearTensor(input, 0, count * floatsPerFrame, 114f / 255f)
+        val frameArrays = arrayOf(frame.bayer)
+        val bases = IntArray(count) { it * floatsPerFrame }
+        val degrees = (frame.sensorOrientation % 360 + 360) % 360
+        val rgbW = frame.width / 2; val rgbH = frame.height / 2
+        val orientedH = if (degrees == 90 || degrees == 270) rgbW else rgbH
+        val orientedW = if (degrees == 90 || degrees == 270) rgbH else rgbW
+        val scale = minOf(imgsz.toFloat() / orientedW, imgsz.toFloat() / orientedH)
+        val nh = Math.round(orientedH * scale)
+        val futures = ArrayList<java.util.concurrent.Future<Double>>()
+        repeat(4) { stripe ->
+            val y0 = stripe * nh / 4; val y1 = (stripe + 1) * nh / 4
+            futures += pool.submit<Double> {
+                val cpuStart = System.nanoTime()
+                check(NativeTensorPreprocessor.fillFusedBayerSrgbRowStripe(
+                    frameArrays, 1, frame.width, frame.height, frame.cfaPattern,
+                    frame.sensorOrientation, gainRatios, bases, lut, input,
+                    imgsz, y0, y1))
+                (System.nanoTime() - cpuStart) / 1e6
+            }
+        }
+        val cpuMs = futures.sumOf { it.get() }
+        input.rewind()
+        val nw = Math.round(orientedW * scale)
+        val mapping = TensorLetterbox(scale.toDouble(),
+            ((imgsz - nw) / 2f).toDouble(), ((imgsz - nh) / 2f).toDouble())
+        val end = System.nanoTime()
+        return Exp21TensorResult(DirectTensorBatch(input, List(count) { mapping }),
+            Exp21PathProfile("V2_explicit_gains_native", count,
+                (end - started) / 1e6, cpuMs, 0.0, (end - started) / 1e6))
+    }
+
+    /**
      * EXP6 integrated path: RAW burst sum, 2x2 demosaic, gain, sRGB and letterbox are fused
      * in native code. It avoids per-row summed Bayer and three full RGB IntArrays while
      * retaining the exact FIRST_N and integer-green-average semantics of the reference.

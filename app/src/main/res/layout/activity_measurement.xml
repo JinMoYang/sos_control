@@ -99,6 +99,8 @@
                 <RadioButton android:id="@+id/methodProposed"
                     style="@style/Option.Narrow" android:text="@string/method_proposed"
                     android:checked="true" />
+                <RadioButton android:id="@+id/methodContinuous"
+                    style="@style/Option.Narrow" android:text="Prop-C" />
                 <RadioButton android:id="@+id/methodPhysSweep"
                     style="@style/Option.Narrow" android:text="PhysSweep" />
                 <RadioButton android:id="@+id/methodShinNM"

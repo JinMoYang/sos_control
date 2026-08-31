@@ -568,6 +568,17 @@ class MeasurementActivity : AppCompatActivity() {
         // Second method row (baselines) — mutually exclusive with methodGroup, so at most
         // one of the two groups has a checked id.
         when (findViewById<RadioGroup>(R.id.methodGroup2).checkedRadioButtonId) {
+            R.id.methodContinuous -> {
+                val period = when (periodGroup.checkedRadioButtonId) {
+                    R.id.period10 -> 10
+                    R.id.period20 -> 20
+                    else -> 5
+                }
+                start("proposed_v2_p$period") {
+                    mc!!.runContinuousProposed(period, NO_FRAME_CAP, ::post, ::onFrameWithOffload)
+                }
+                return
+            }
             R.id.methodPhysSweep -> {
                 val n = grid.nGain * grid.nShutter
                 start("physsweep_full_h$n") {

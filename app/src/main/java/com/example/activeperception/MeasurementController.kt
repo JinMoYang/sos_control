@@ -392,7 +392,9 @@ class MeasurementController(
         idx: Int, method: String, chosenCell: Int, gainVal: Int, expUs: Int,
         k: Int, isBurst: Boolean, formationMs: Double, inferMs: Double, totalMs: Double,
         dets: List<Detection>, imgPath: String, tieBreak: String = "",
-        aeIso: Int = -1, aeExpUs: Int = -1
+        aeIso: Int = -1, aeExpUs: Int = -1,
+        /** v2 passes nominal rung ISO with no digital-boost concept behind it. */
+        applyBoost: Boolean = true
     ) {
         // Published before the mode's onFrame callback fires, so listeners see the matching id.
         lastFrameIdx = idx
@@ -409,7 +411,7 @@ class MeasurementController(
             sensors.getCurrentLap(), "%.3f".format(sensors.currentHeadingAngle),
             regime.update(sensors.currentYawRate),
             sensors.currentYawRate, sensors.currentLux, sensors.currentAccel,
-            method, chosenCell, effIso(gainVal), expUs,
+            method, chosenCell, if (applyBoost) effIso(gainVal) else gainVal, expUs,
             m?.requestedIso ?: -1, m?.appliedIso ?: -1,
             m?.requestedExpUs ?: -1L, m?.appliedExpUs ?: -1L,
             m?.frameDurationNs ?: -1L, m?.applyDelayFrames ?: raw.lastApplyDelayFrames ?: -1L,
@@ -3345,6 +3347,193 @@ class MeasurementController(
         fallback = fallback,
         onFrame = onFrame
     )
+
+    // ---------- Continuous v2 (S26U): selection-following analog base ----------
+
+    /** Nominal rungs of the 5x5 (gain x shutter) space. Every rung is captured at
+     *  min(rung, analog ceiling); only the 1600 rung carries a digital residual (x1.33 on
+     *  a 1200 capture). Shutter rungs are true physical exposures — burst summing retired
+     *  on the phone, where actuation is 0 frames. */
+    private val v2GainRungs = intArrayOf(100, 200, 400, 800, 1600)
+    private val v2ShutterRungsUs = intArrayOf(2083, 4167, 8333, 16667, 33333)
+    private fun v2Cell(gi: Int, sj: Int) = gi * v2ShutterRungsUs.size + sj
+
+    /**
+     * Continuity design: the SELECTED candidate becomes the next frame's physical base —
+     * the same rule the shutter axis always followed, extended to gain. Per step the
+     * window column is formed as div2 (base frame, near-lossless division), x1 (base
+     * frame), and x2 anchored on an ANALOG +1-stop bracket frame; the digital x2 from the
+     * base frame is still detected and logged as a per-frame analog-vs-digital diagnostic.
+     * Probes add the two neighbor shutter rows physically. Two consecutive same-direction
+     * wins (hysteresis) move the base one rung; clipping self-corrects because a blown
+     * candidate scores low and selection walks back down.
+     */
+    fun runContinuousProposed(
+        period: Int, maxFrames: Int,
+        onStatus: (String) -> Unit,
+        onFrame: (Bitmap, List<Detection>, Int, Int) -> Unit
+    ) {
+        require(period >= 2)
+        val tfl = detector as? com.example.activeperception.acquire.TfliteYoloDetector
+            ?: error("continuous v2 requires TfliteYoloDetector")
+        val analogCeil = if (raw.maxAnalogIso > 0) raw.maxAnalogIso else raw.sensorIsoMax
+        startPass("proposed_v2_continuous", isGtReference = false, methodParams = JSONObject()
+            .put("title", "Continuous v2 | selection-following analog base, 3x3 window on 5x5 space")
+            .put("gain_rungs", JSONArray(v2GainRungs.toList()))
+            .put("shutter_rungs_us", JSONArray(v2ShutterRungsUs.toList()))
+            .put("analog_ceiling", analogCeil)
+            .put("period", period).put("hysteresis", 2)
+            .put("candidates",
+                "div2(base) / x1(base) / x2(analog hi bracket; digital x2 logged as diagnostic)")
+            .put("frames_iso_caveat",
+                "frames.csv iso_req/iso_applied reflect the LAST capture of the step " +
+                "(hi bracket or probe frame); cont.csv carries the base bookkeeping"))
+        logger.csv("candidates", listOf("frame", "cell", "gain", "exposure_us",
+            "sum_conf", "chosen", "tie_break"))
+        logger.csv("cont", listOf("frame", "rung_idx", "nominal_iso", "phys_iso", "residual",
+            "shutter_idx", "hi_iso", "probe", "x2_digital_conf", "x2_analog_conf",
+            "gain_pend", "shutter_pend"))
+        val router = CrossExposureRouter(selectConf)
+        val src = ParallelRawCandidateSource(grid, raw,
+            colorPipeline = ColorPipeline.ORIGINAL_GAIN_SRGB, burstWindow = BurstWindow.FIRST_N)
+        raw.configureDecodeThreads(4)
+        raw.startFastCapture()
+        onStatus("warming FP16 GPU batches…")
+        tfl.warmUpAllBatches()
+        var gi = 2; var sj = 2               // cold start: ISO 400 / 8.3 ms
+        var gainPend = 0; var shutterPend = 0
+        var f = 0
+        try {
+            while (running && f < maxFrames) {
+                val t0 = now()
+                val probe = f % period == 0
+                val rung = v2GainRungs[gi]
+                val phys = minOf(rung, analogCeil)
+                val res = rung.toDouble() / phys
+                val expUs = v2ShutterRungsUs[sj]
+                val base = raw.captureFast(expUs, phys, 1).firstOrNull() ?: break
+                val hiNominal = if (gi < v2GainRungs.size - 1) v2GainRungs[gi + 1] else 0
+                val hiPhys = if (hiNominal > 0) minOf(hiNominal, analogCeil) else 0
+                val hi = if (hiPhys > 0) raw.captureFast(expUs, hiPhys, 1).firstOrNull() else null
+                val tForm = now()
+                val ratios = doubleArrayOf(0.5 * res, 1.0 * res, 2.0 * res)
+                val baseT = src.formExplicitGainsTensor(base, ratios)
+                val baseD = tfl.detectTensorBatchOptimized(baseT.batch)
+                var inferMs = tfl.lastRunMs + tfl.lastDecodeMs
+                var hiDets: List<Detection>? = null
+                if (hi != null) {
+                    val hiT = src.formExplicitGainsTensor(hi,
+                        doubleArrayOf(hiNominal.toDouble() / hiPhys))
+                    hiDets = tfl.detectTensorBatchOptimized(hiT.batch)[0]
+                    inferMs += tfl.lastRunMs + tfl.lastDecodeMs
+                }
+                // Window column at the current shutter. x2 rides the analog bracket when
+                // one exists; the base frame's digital x2 stays as a logged diagnostic.
+                val nominals = ArrayList<Int>(3)
+                val colDets = ArrayList<List<Detection>>(3)
+                // Parallel base-tensor lane per candidate; the analog x2 previews through
+                // the digital x2 lane (same letterbox mapping, visually equivalent).
+                val lanes = ArrayList<Int>(3)
+                if (gi > 0) { nominals += v2GainRungs[gi - 1]; colDets += baseD[0]; lanes += 0 }
+                nominals += rung; colDets += baseD[1]; lanes += 1
+                if (hiDets != null) { nominals += hiNominal; colDets += hiDets; lanes += 2 }
+                val colScores = DoubleArray(colDets.size) { sumConf(colDets[it]) }
+                val allZero = colScores.all { it <= 0.0 }
+                val centerIdx = nominals.indexOf(rung)
+                val bestIdx = if (allZero) centerIdx
+                    else colScores.indices.maxByOrNull { colScores[it] }!!
+                val chosenNominal = nominals[bestIdx]
+                val chosenDets = colDets[bestIdx]
+                val chosenGi = gi + when {
+                    chosenNominal > rung -> 1; chosenNominal < rung -> -1; else -> 0
+                }
+                // Materialize the preview/JPEG BEFORE probe formation reuses the K=3 buffer.
+                val previewLane = lanes[bestIdx]
+                val bmp = src.selectedTensorBitmap(baseT, previewLane)
+                val previewDets = src.detectionsForTensorPreview(chosenDets, baseT, previewLane)
+                // Probe: neighbor shutter rows, physically captured (0-frame actuation).
+                val probeCols = HashMap<Int, DoubleArray>()
+                if (probe) {
+                    for (nsj in intArrayOf(sj - 1, sj + 1)) {
+                        if (nsj !in v2ShutterRungsUs.indices) continue
+                        val pf = raw.captureFast(v2ShutterRungsUs[nsj], phys, 1).firstOrNull()
+                            ?: continue
+                        val pt = src.formExplicitGainsTensor(pf, ratios)
+                        val pd = tfl.detectTensorBatchOptimized(pt.batch)
+                        inferMs += tfl.lastRunMs + tfl.lastDecodeMs
+                        probeCols[nsj] = DoubleArray(3) { sumConf(pd[it]) }
+                        for (lane in 0 until 3) {
+                            val cGi = (gi - 1 + lane).coerceIn(0, v2GainRungs.size - 1)
+                            logger.row("candidates", listOf(f, v2Cell(cGi, nsj),
+                                v2GainRungs[cGi], v2ShutterRungsUs[nsj],
+                                "%.5f".format(probeCols[nsj]!![lane]), 0, "probe"))
+                            writeDets(f, "cand", v2Cell(cGi, nsj), pd[lane])
+                        }
+                    }
+                }
+                val formMs = ms(tForm) - inferMs
+                // Column candidate rows + full tails.
+                for (i in nominals.indices) {
+                    val cGi = gi + when {
+                        nominals[i] > rung -> 1; nominals[i] < rung -> -1; else -> 0
+                    }
+                    logger.row("candidates", listOf(f, v2Cell(cGi, sj), nominals[i], expUs,
+                        "%.5f".format(colScores[i]), if (i == bestIdx) 1 else 0,
+                        if (allZero) "hold" else "conf"))
+                    writeDets(f, "cand", v2Cell(cGi, sj), colDets[i])
+                }
+                logger.row("cont", listOf(f, gi, rung, phys, "%.4f".format(res), sj,
+                    hiPhys, if (probe) 1 else 0,
+                    "%.5f".format(sumConf(baseD[2])),
+                    if (hiDets != null) "%.5f".format(sumConf(hiDets)) else "",
+                    gainPend, shutterPend))
+                lastRoutingDecision = router.decide(colDets)
+                logger.row("router", listOf(f, "%.5f".format(lastRoutingDecision.score),
+                    lastRoutingDecision.modelLimitedClusters,
+                    lastRoutingDecision.recoveredLocallyClusters,
+                    if (lastRoutingDecision.shouldOffload) 1 else 0))
+                // Continuity with 2-step hysteresis on both axes.
+                val rel = chosenGi - gi
+                gainPend = when {
+                    allZero || rel == 0 -> 0
+                    rel > 0 -> maxOf(1, gainPend + 1)
+                    else -> minOf(-1, gainPend - 1)
+                }
+                if (gainPend >= 2 && gi < v2GainRungs.size - 1) { gi++; gainPend = 0 }
+                else if (gainPend <= -2 && gi > 0) { gi--; gainPend = 0 }
+                if (probe && probeCols.isNotEmpty()) {
+                    var bestSj = sj; var bestCol = colScores.sum()
+                    for ((nsj, sc) in probeCols) {
+                        val s = sc.sum(); if (s > bestCol) { bestCol = s; bestSj = nsj }
+                    }
+                    val srel = Integer.signum(bestSj - sj)
+                    shutterPend = when {
+                        srel == 0 -> 0
+                        srel > 0 -> maxOf(1, shutterPend + 1)
+                        else -> minOf(-1, shutterPend - 1)
+                    }
+                    if (shutterPend >= 2 && sj < v2ShutterRungsUs.size - 1) { sj++; shutterPend = 0 }
+                    else if (shutterPend <= -2 && sj > 0) { sj--; shutterPend = 0 }
+                }
+                val totalMs = ms(t0)
+                val path = logger.saveJpegAsync(
+                    "${frameName(f)}_cell${v2Cell(chosenGi, sj)}", bmp)
+                logFrame(f, "proposed_v2", v2Cell(chosenGi, sj), chosenNominal, expUs,
+                    nominals.size + 3 * probeCols.size, probe, formMs, inferMs, totalMs,
+                    chosenDets, path, tieBreak = if (allZero) "hold" else "conf",
+                    applyBoost = false)
+                runCatching { onFrame(bmp, previewDets, chosenNominal, expUs) }
+                onStatus("V2 f=$f iso=$rung(${phys}) exp=${expUs / 1000.0}ms " +
+                    "conf=${"%.2f".format(colScores[bestIdx])}" +
+                    (if (probe) " · probe" else "") + " · ${"%.0f".format(totalMs)}ms")
+                f++
+            }
+        } finally {
+            runCatching { raw.stopFastCapture() }
+            runCatching { src.shutdown() }
+            endPass()
+        }
+    }
 
     /** EXP5.5 | Final adaptive validation after EXP5. The probe chooses a shutter row,
      * requests that physical exposure immediately, then runs four single-frame K=3 steps.
